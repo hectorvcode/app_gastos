@@ -2,10 +2,30 @@
 
 Especificación completa en `SPEC.md`. Este archivo resume las decisiones clave.
 
-## Reglas de trabajo (obligatorias)
-- **Nunca ejecutar `git commit` ni `git push`.** Al cerrar cada fase se entrega un mensaje de commit sugerido y el usuario lo hace a mano. El despliegue ocurre cuando el usuario hace push.
-- Implementar las fases de SPEC.md en orden, una a la vez. Al terminar cada una: correr pruebas, dar mensaje de commit sugerido y la lista de verificación manual (niveles de "Cómo probar antes de instalar": comandos, URL y la IP de la laptop). Esperar confirmación antes de la siguiente fase.
+## Metodología de trabajo (obligatoria, todas las sesiones)
+1. Un planificador (Claude en la web) redacta los prompts; el usuario me los pasa y le devuelve mis resultados. Actúo solo sobre lo que pide cada prompt.
+2. Si algo es ambiguo, hago las preguntas y me detengo, sin implementar suposiciones.
+3. Git lo maneja el usuario manualmente. **Nunca ejecuto comandos de git** (ni commit, ni push, ni add, ni checkout, ni branch, ni otros). Solo leo el estado con `git status` o `git diff` si el usuario lo pide. El despliegue ocurre cuando el usuario hace push.
+4. Cada respuesta termina con un bloque `REPORTE PARA EL PLANIFICADOR` con este formato exacto:
+   - Fase y estado: (en curso / lista para probar / cerrada)
+   - Qué cambió: (máximo 5 viñetas)
+   - Archivos tocados:
+   - Pruebas: (cuántas pasan, cuáles nuevas)
+   - Decisiones que tomé: (con el motivo, en una línea cada una)
+   - Preguntas para mí:
+   - Lista de verificación manual: (solo lo nuevo o lo que cambió, indicando el nivel 1, 2a o 3 de SPEC.md)
+   - Commit sugerido: (Conventional Commits, para que el usuario lo ejecute)
+   - Siguiente paso propuesto:
+5. Si un fallo reportado no se puede reproducir, primero agrego el registro o la prueba que haga falta para encontrarlo, en lugar de solo pedir datos.
+
+## Reglas del proyecto
+- Implementar las fases de SPEC.md en orden, una a la vez. Al terminar cada una: correr pruebas y entregar el reporte con la lista de verificación manual (comandos, URL e IP de la laptop). Esperar confirmación antes de la siguiente fase.
 - Si algo de SPEC.md es ambiguo o imposible técnicamente, preguntar antes de decidir.
+- Lógica de pantallas en módulos sin DOM (`src/lib/`) para poder probarla con Vitest; la UI (`src/ui/`) solo conecta.
+- **La app debe funcionar sin errores con `window.isSecureContext` en `false`**, porque así se prueba en el celular durante el desarrollo (`http://<IP-LAN>:5173`, nivel 2a). En ese contexto no existen `crypto.randomUUID`, `navigator.storage`, `navigator.serviceWorker`, `navigator.share`/`canShare`, entre otros: usar siempre `src/lib/compat.ts` (`generarUuid`, `pedirPersistencia`, `registrarServiceWorker`) y comprobar que la API exista antes de usarla (en Fase 6, Web Share con descarga como respaldo). Nunca depender de una API solo-HTTPS sin alternativa.
+- Ningún error es silencioso: si guardar o cualquier acción falla, se muestra un aviso en pantalla (`mostrarError`) y no se pierde lo que el usuario escribió. Hay un manejador global de errores no capturados en `main.ts`.
+- Tras tocar un botón de la pantalla Registrar se le quita el foco, para que Enter o espacio no repitan la acción.
+- Teclado físico en Registrar: dígitos, `.`/`,` (monedas con decimales) y Backspace. Enter se ignora: guardar exige tocar una categoría.
 
 ## Decisiones clave
 - Sitio estático: TypeScript estricto + Vite, sin frameworks de UI, HTML + CSS propio.

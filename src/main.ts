@@ -1,11 +1,16 @@
 import './style.css';
 import { registerSW } from 'virtual:pwa-register';
+import { pedirPersistencia, registrarServiceWorker, mensajeDeError } from './lib/compat';
+import { instalarManejadorGlobal, mostrarError } from './ui/avisos';
 import { crearRegistrar } from './ui/registrar';
 
-registerSW({ immediate: true });
+instalarManejadorGlobal();
+
+// Sin contexto seguro (http://<IP-LAN>) no hay service worker ni storage: se omiten.
+registrarServiceWorker(() => registerSW({ immediate: true }));
 
 // Evita que Chrome borre los datos si el teléfono se queda sin espacio.
-void navigator.storage?.persist?.();
+void pedirPersistencia();
 
 const TABS = [
   { id: 'registrar', icono: '➕', nombre: 'Registrar' },
@@ -54,4 +59,4 @@ async function iniciar(): Promise<void> {
   mostrar('registrar');
 }
 
-void iniciar();
+iniciar().catch((e) => mostrarError(`No se pudo iniciar la app: ${mensajeDeError(e)}`));

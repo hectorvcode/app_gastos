@@ -1,9 +1,11 @@
 import { db, getAjuste } from '../db';
-import type { Categoria, Gasto } from '../types';
-import { addDays, buildFechaIso, dateKey, dayMonthLabel, shortLabel } from '../lib/dates';
-import { applyKey, entryToNumber, formatEntry, type Key } from '../lib/money';
+import { addDays, dayMonthLabel, shortLabel } from '../lib/dates';
+import { mensajeDeError } from '../lib/compat';
+import { formatEntry, entryToNumber, type Key } from '../lib/money';
+import { aplicarTeclaFisica, SesionRegistro } from '../lib/registro';
+import type { Categoria } from '../types';
+import { mostrarError } from './avisos';
 
-const REINICIO_FECHA_MS = 10 * 60 * 1000;
 const DESHACER_MS = 5000;
 
 const TECLAS: { key: Key; label: string; aria?: string }[] = [
@@ -32,13 +34,17 @@ function el<K extends keyof HTMLElementTagNameMap>(
   return e;
 }
 
+/** Quita el foco del botón tocado: Enter o espacio no deben repetir la acción. */
+function sinFoco(e: Event): void {
+  (e.currentTarget as HTMLElement | null)?.blur();
+}
+
 export async function crearRegistrar(): Promise<HTMLElement> {
-  let moneda = await getAjuste('monedaPredeterminada', 'COP');
-  let entry = '';
-  /** null = "Hoy" (sigue al reloj, incluso pasada la medianoche). */
-  let fechaElegida: string | null = null;
-  let ultimaActividad = Date.now();
-  let ultimoGastoId: string | null = null;
+  const moneda = await getAjuste('monedaPredeterminada', 'COP');
+  const sesion = new SesionRegistro(moneda, {
+    add: async (g) => void (await db.gastos.add(g)),
+    delete: (id) => db.gastos.delete(id),
+  });
   let toastTimer: number | undefined;
 
   const root = el('section', 'registrar');
@@ -63,9 +69,10 @@ export async function crearRegistrar(): Promise<HTMLElement> {
     const b = el('button', 'tecla', t.label);
     b.type = 'button';
     if (t.aria) b.setAttribute('aria-label', t.aria);
-    b.addEventListener('click', () => {
-      entry = applyKey(entry, t.key, moneda);
+    b.addEventListener('click', (e) => {
+      sesion.pulsar(t.key);
       pintarMonto();
+      sinFoco(e);
     });
     teclado.append(b);
   }
@@ -89,31 +96,17 @@ export async function crearRegistrar(): Promise<HTMLElement> {
 
   root.append(chips, monto, teclado, grid, toast, hoja);
 
-  // ---------- Lógica ----------
-  const hoy = (): string => dateKey(new Date());
-
-  /** Vuelve a "Hoy" si pasaron 10 minutos sin registrar. */
-  function revisarReinicioFecha(): void {
-    if (fechaElegida !== null && Date.now() - ultimaActividad > REINICIO_FECHA_MS) {
-      fechaElegida = null;
-    }
-  }
-
-  function fechaActual(): string {
-    revisarReinicioFecha();
-    return fechaElegida ?? hoy();
-  }
-
+  // ---------- Pintado ----------
   function pintarFecha(): void {
-    const key = fechaActual();
-    const esHoy = key === hoy();
+    const key = sesion.fechaActual;
+    const esHoy = key === sesion.hoy;
     chipFecha.textContent = `📅 ${esHoy ? 'Hoy' : shortLabel(key)}`;
     chipFecha.classList.toggle('chip-alerta', !esHoy);
   }
 
   function pintarMonto(): void {
-    montoValor.textContent = formatEntry(entry);
-    monto.classList.toggle('vacio', entry === '' || entryToNumber(entry) === 0);
+    montoValor.textContent = formatEntry(sesion.entry);
+    monto.classList.toggle('vacio', entryToNumber(sesion.entry) === 0);
   }
 
   function vibrarMonto(): void {
@@ -129,47 +122,36 @@ export async function crearRegistrar(): Promise<HTMLElement> {
     toast.hidden = false;
     toastTimer = window.setTimeout(() => {
       toast.hidden = true;
-      ultimoGastoId = null;
+      sesion.olvidarUltimo();
     }, DESHACER_MS);
   }
 
   toastDeshacer.addEventListener('click', async () => {
     window.clearTimeout(toastTimer);
     toast.hidden = true;
-    if (ultimoGastoId) {
-      await db.gastos.delete(ultimoGastoId);
-      ultimoGastoId = null;
+    try {
+      await sesion.deshacer();
+    } catch (e) {
+      mostrarError(`No se pudo deshacer: ${mensajeDeError(e)}`);
     }
   });
 
   async function guardar(cat: Categoria): Promise<void> {
-    const importe = entryToNumber(entry);
-    if (importe <= 0) {
+    if (entryToNumber(sesion.entry) <= 0) {
       vibrarMonto();
       return;
     }
-    const ahora = new Date();
-    const key = fechaActual();
-    const iso = ahora.toISOString();
-    const gasto: Gasto = {
-      id: crypto.randomUUID(),
-      fecha: buildFechaIso(key, ahora),
-      monto: importe,
-      moneda,
-      categoriaId: cat.id,
-      nota: '',
-      fotoId: null,
-      creadoEn: iso,
-      editadoEn: iso,
-      exportadoEn: null,
-    };
-    await db.gastos.add(gasto);
-    ultimoGastoId = gasto.id;
-    ultimaActividad = Date.now();
-    entry = '';
-    pintarMonto();
-    pintarFecha();
-    mostrarToast(key === hoy() ? 'Guardado' : `Guardado el ${dayMonthLabel(key)}`);
+    try {
+      const promesa = sesion.guardar(cat.id);
+      pintarMonto(); // el monto ya se limpió; la base de datos termina en segundo plano
+      const r = await promesa;
+      if (!r.ok) return;
+      pintarFecha();
+      mostrarToast(r.esHoy ? 'Guardado' : `Guardado el ${dayMonthLabel(r.fechaKey)}`);
+    } catch (e) {
+      pintarMonto(); // la sesión conserva el monto escrito
+      mostrarError(`No se pudo guardar: ${mensajeDeError(e)}`);
+    }
   }
 
   async function pintarCategorias(): Promise<void> {
@@ -179,33 +161,38 @@ export async function crearRegistrar(): Promise<HTMLElement> {
         const b = el('button', 'cat');
         b.type = 'button';
         b.append(el('span', 'cat-emoji', c.emoji), el('span', 'cat-nombre', c.nombre));
-        b.addEventListener('click', () => void guardar(c));
+        b.addEventListener('click', (e) => {
+          sinFoco(e);
+          void guardar(c);
+        });
         return b;
       }),
     );
   }
 
   // ---------- Selector de fecha ----------
-  function elegirFecha(key: string | null): void {
-    fechaElegida = key === hoy() ? null : key;
-    ultimaActividad = Date.now();
+  function cerrarHoja(): void {
     hoja.hidden = true;
     pintarFecha();
   }
 
   function abrirHoja(): void {
-    const h = hoy();
-    const opciones: [string, string][] = [
-      ['Hoy', h],
-      ['Ayer', addDays(h, -1)],
-      ['Antier', addDays(h, -2)],
+    const h = sesion.hoy;
+    const actual = sesion.fechaActual;
+    const opciones: [string, number][] = [
+      ['Hoy', 0],
+      ['Ayer', 1],
+      ['Antier', 2],
     ];
-    const actual = fechaActual();
-    const botones = opciones.map(([label, key]) => {
+    const botones = opciones.map(([label, dias]) => {
+      const key = addDays(h, -dias);
       const b = el('button', 'hoja-op', `${label} · ${dayMonthLabel(key)}`);
       b.type = 'button';
       b.classList.toggle('activa', key === actual);
-      b.addEventListener('click', () => elegirFecha(key));
+      b.addEventListener('click', () => {
+        sesion.elegirDiasAtras(dias);
+        cerrarHoja();
+      });
       return b;
     });
 
@@ -214,7 +201,9 @@ export async function crearRegistrar(): Promise<HTMLElement> {
     input.max = h;
     input.value = actual;
     input.addEventListener('change', () => {
-      if (input.value && input.value <= hoy()) elegirFecha(input.value);
+      if (!input.value) return;
+      sesion.elegirFecha(input.value);
+      cerrarHoja();
     });
     const otra = el('button', 'hoja-op', 'Elegir fecha…');
     otra.type = 'button';
@@ -235,9 +224,23 @@ export async function crearRegistrar(): Promise<HTMLElement> {
     hoja.hidden = false;
   }
 
-  chipFecha.addEventListener('click', abrirHoja);
+  chipFecha.addEventListener('click', (e) => {
+    sinFoco(e);
+    abrirHoja();
+  });
   hoja.addEventListener('click', (e) => {
     if (e.target === hoja) hoja.hidden = true;
+  });
+
+  // ---------- Teclado físico ----------
+  document.addEventListener('keydown', (e) => {
+    if (root.hidden || !hoja.hidden) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.target instanceof HTMLInputElement) return;
+    if (aplicarTeclaFisica(sesion, e.key)) {
+      e.preventDefault(); // también evita que Enter active un botón con foco
+      pintarMonto();
+    }
   });
 
   // Mantiene el chip al día (reinicio por inactividad / cambio de día).
