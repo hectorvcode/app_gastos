@@ -1,6 +1,7 @@
 import type { Gasto } from '../types';
 import { addDays, dateKey, fechaHoraAIso, isoAFechaHora, shortLabel } from './dates';
 import { decimalsFor } from './money';
+import { MAX_NOTA } from './nota';
 
 export interface TotalMoneda {
   moneda: string;
@@ -64,6 +65,9 @@ export interface CambiosGasto {
   /** Texto escrito por el usuario; admite coma o punto decimal */
   monto: string;
   categoriaId: string;
+  moneda: string;
+  /** Texto de la nota (puede ir vacío) */
+  nota: string;
 }
 
 export type ResultadoEdicion = { ok: true; gasto: Gasto; cambio: boolean } | { ok: false; error: string };
@@ -71,7 +75,7 @@ export type ResultadoEdicion = { ok: true; gasto: Gasto; cambio: boolean } | { o
 /** Valida los cambios y devuelve el gasto actualizado (con `editadoEn` nuevo si hubo cambios). */
 export function validarEdicion(original: Gasto, c: CambiosGasto, ahora: Date): ResultadoEdicion {
   const texto = c.monto.trim().replace(',', '.');
-  const decimales = decimalsFor(original.moneda);
+  const decimales = decimalsFor(c.moneda);
   const patron = decimales === 0 ? /^\d{1,9}$/ : new RegExp(`^\\d{1,9}(\\.\\d{1,${decimales}})?$`);
   if (!patron.test(texto)) {
     return {
@@ -93,12 +97,21 @@ export function validarEdicion(original: Gasto, c: CambiosGasto, ahora: Date): R
     return { ok: false, error: 'La fecha y la hora no pueden ser futuras.' };
   }
 
-  const cambio = fecha !== original.fecha || monto !== original.monto || c.categoriaId !== original.categoriaId;
+  if (c.nota.length > MAX_NOTA) return { ok: false, error: `La nota admite hasta ${MAX_NOTA} caracteres.` };
+  const nota = c.nota.trim();
+  if (!/^[A-Z]{3}$/.test(c.moneda)) return { ok: false, error: 'Elige una moneda.' };
+
+  const cambio =
+    fecha !== original.fecha ||
+    monto !== original.monto ||
+    c.categoriaId !== original.categoriaId ||
+    c.moneda !== original.moneda ||
+    nota !== original.nota;
   if (!cambio) return { ok: true, gasto: original, cambio: false };
   return {
     ok: true,
     cambio: true,
-    gasto: { ...original, fecha, monto, categoriaId: c.categoriaId, editadoEn: ahora.toISOString() },
+    gasto: { ...original, fecha, monto, moneda: c.moneda, nota, categoriaId: c.categoriaId, editadoEn: ahora.toISOString() },
   };
 }
 

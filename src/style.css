@@ -589,3 +589,71 @@ button {
   color: #dc2626;
   font-weight: 700;
 }
+
+/* ---------- Fase 4: monedas y notas ---------- */
+.chips {
+  flex-wrap: wrap;
+}
+
+.monto-relleno {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.moneda-selector {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.nota-input {
+  min-height: 64px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  color: var(--fg);
+  font: inherit;
+  font-size: 1.1rem;
+  width: 100%;
+}
+
+.ajustes {
+  padding: 12px 10px;
+  display: grid;
+  gap: 12px;
+}
+
+.ajustes-seccion {
+  display: grid;
+  gap: 8px;
+}
+
+.monedas-lista {
+  display: grid;
+  gap: 8px;
+}
+
+.moneda-fila {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  padding: 8px;
+  border-radius: 14px;
+  background: var(--surface);
+}
+
+.moneda-nombre {
+  grid-column: 1 / -1;
+  font-weight: 700;
+}
+
+.moneda-fila .cat-op:disabled {
+  opacity: 1;
+}
+
+.pronto-resto {
+  margin: 0;
+  color: var(--muted);
+  text-align: center;
+}

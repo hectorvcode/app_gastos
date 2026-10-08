@@ -116,7 +116,7 @@ describe('filtros', () => {
 
 describe('validarEdicion', () => {
   const original = gasto({ monto: 45000, categoriaId: 'comida', hora: '10:00' });
-  const base: CambiosGasto = { fecha: HOY, hora: '10:00', monto: '45000', categoriaId: 'comida' };
+  const base: CambiosGasto = { fecha: HOY, hora: '10:00', monto: '45000', categoriaId: 'comida', moneda: 'COP', nota: '' };
   const editar = (c: Partial<CambiosGasto>, g = original) => validarEdicion(g, { ...base, ...c }, AHORA);
 
   it('actualiza editadoEn y conserva el resto', () => {
@@ -146,9 +146,9 @@ describe('validarEdicion', () => {
   });
   it('USD acepta coma o punto y hasta 2 decimales', () => {
     const usd = gasto({ moneda: 'USD', monto: 12.5 });
-    const r = validarEdicion(usd, { fecha: HOY, hora: '10:00', monto: '12,75', categoriaId: 'comida' }, AHORA);
+    const r = validarEdicion(usd, { ...base, monto: '12,75', moneda: 'USD' }, AHORA);
     expect(r.ok && r.gasto.monto).toBe(12.75);
-    expect(validarEdicion(usd, { fecha: HOY, hora: '10:00', monto: '1.234', categoriaId: 'comida' }, AHORA).ok).toBe(false);
+    expect(validarEdicion(usd, { ...base, monto: '1.234', moneda: 'USD' }, AHORA).ok).toBe(false);
   });
   it('rechaza fechas y horas futuras', () => {
     expect(editar({ fecha: '2026-10-08' }).ok).toBe(false);

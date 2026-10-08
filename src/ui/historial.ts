@@ -1,4 +1,4 @@
-import { db } from '../db';
+import { db, repoAjustes } from '../db';
 import { mensajeDeError } from '../lib/compat';
 import {
   dateKey,
@@ -16,7 +16,9 @@ import {
   validarEdicion,
   type TotalMoneda,
 } from '../lib/historial';
-import { formatMonto } from '../lib/money';
+import { decimalsFor, formatMonto, montoParaCampo } from '../lib/money';
+import { cargarConfigMonedas } from '../lib/monedas';
+import { MAX_NOTA } from '../lib/nota';
 import type { Categoria, Gasto } from '../types';
 import { mostrarError } from './avisos';
 import { cerrarTecladoConEnter } from './teclado';
@@ -48,6 +50,7 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
   let mesElegido: Mes | null = null; // null = mes actual
   let categoriaFiltro: string | null = null;
   let categorias: Categoria[] = [];
+  let monedasVisibles: string[] = [];
   let gastosMes: Gasto[] = [];
   let limite = FILAS_POR_LOTE;
   let lectura = 0;
@@ -97,12 +100,14 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
     const mi = ++lectura;
     try {
       const { desde, hasta } = rangoMes(mesActual());
-      const [cats, gastos] = await Promise.all([
+      const [cats, config, gastos] = await Promise.all([
         db.categorias.orderBy('orden').toArray(),
+        cargarConfigMonedas(repoAjustes),
         db.gastos.where('fecha').between(desde, hasta, true, false).toArray(),
       ]);
       if (mi !== lectura) return; // llegó una lectura más nueva
       categorias = cats;
+      monedasVisibles = config.visibles;
       gastosMes = gastos;
       limite = FILAS_POR_LOTE;
       pintarFiltros();
@@ -195,7 +200,7 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
     fila.append(el('span', 'fila-emoji', cat?.emoji ?? '❔'));
     const centro = el('span', 'fila-centro');
     centro.append(el('span', 'fila-nombre', cat?.nombre ?? 'Sin categoría'));
-    const detalle = [isoAFechaHora(g.fecha).hora, g.nota].filter(Boolean).join(' · ');
+    const detalle = [isoAFechaHora(g.fecha).hora, g.nota.replace(/\s+/g, ' ')].filter(Boolean).join(' · ');
     centro.append(el('span', 'fila-detalle', detalle));
     fila.append(centro);
 
@@ -211,6 +216,7 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
   function abrirEdicion(g: Gasto): void {
     const { fecha, hora } = isoAFechaHora(g.fecha);
     let categoriaId = g.categoriaId;
+    let moneda = g.moneda;
 
     const titulo = el('h2', 'hoja-titulo', 'Editar gasto');
 
@@ -228,12 +234,37 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
     iMonto.type = 'text';
     iMonto.inputMode = 'decimal';
     iMonto.autocomplete = 'off';
-    iMonto.value = String(g.monto);
+    iMonto.value = g.monto.toFixed(decimalsFor(g.moneda));
     iMonto.setAttribute('aria-label', `Monto en ${g.moneda}`);
     cerrarTecladoConEnter(iMonto);
     campos.append(iMonto, iFecha, iHora);
 
-    const etiquetaMoneda = el('p', 'hoja-ayuda', `Moneda: ${g.moneda}`);
+    // Monedas visibles; la del gasto siempre aparece aunque se haya ocultado después.
+    const codigos = monedasVisibles.includes(g.moneda) ? monedasVisibles : [g.moneda, ...monedasVisibles];
+    const monedas = el('div', 'moneda-selector');
+    const botonesMoneda = codigos.map((codigo) => {
+      const b = el('button', 'cat-op', codigo);
+      b.type = 'button';
+      b.setAttribute('aria-pressed', String(codigo === moneda));
+      b.addEventListener('click', () => {
+        moneda = codigo;
+        for (const o of botonesMoneda) o.setAttribute('aria-pressed', String(o === b));
+        iMonto.setAttribute('aria-label', `Monto en ${moneda}`);
+        // Reformatea el monto (12.00 ↔ 12); si perdería decimales, queda igual y Guardar lo señala.
+        iMonto.value = montoParaCampo(iMonto.value, moneda);
+      });
+      return b;
+    });
+    monedas.append(...botonesMoneda);
+
+    const iNota = el('input', 'nota-input');
+    iNota.type = 'text';
+    iNota.maxLength = MAX_NOTA;
+    iNota.autocomplete = 'off';
+    iNota.placeholder = 'Nota (opcional)';
+    iNota.value = g.nota;
+    iNota.setAttribute('aria-label', 'Nota');
+    cerrarTecladoConEnter(iNota);
 
     const cats = el('div', 'cat-selector');
     const botonesCat = categorias.map((c) => {
@@ -262,7 +293,7 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
     guardar.addEventListener('click', async () => {
       const r = validarEdicion(
         g,
-        { fecha: iFecha.value, hora: iHora.value, monto: iMonto.value, categoriaId },
+        { fecha: iFecha.value, hora: iHora.value, monto: iMonto.value, categoriaId, moneda, nota: iNota.value },
         new Date(),
       );
       if (!r.ok) {
@@ -299,7 +330,7 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
     const pie = el('div', 'hoja-pie');
     pie.append(error, guardar);
 
-    panel.replaceChildren(titulo, campos, etiquetaMoneda, cats, pie, borrar, cancelar);
+    panel.replaceChildren(titulo, campos, monedas, iNota, cats, pie, borrar, cancelar);
     hoja.hidden = false;
     panel.scrollTop = 0;
   }

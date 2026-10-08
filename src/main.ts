@@ -2,6 +2,7 @@ import './style.css';
 import { registerSW } from 'virtual:pwa-register';
 import { pedirPersistencia, registrarServiceWorker, mensajeDeError } from './lib/compat';
 import { instalarManejadorGlobal, mostrarError } from './ui/avisos';
+import { crearAjustes } from './ui/ajustes';
 import { crearHistorial } from './ui/historial';
 import { crearRegistrar } from './ui/registrar';
 import { instalarAjusteTeclado } from './ui/teclado';
@@ -32,11 +33,16 @@ async function iniciar(): Promise<void> {
 
   const alMostrar = new Map<string, () => Promise<void>>();
 
-  vistas.set('registrar', await crearRegistrar());
+  const registrar = await crearRegistrar();
+  vistas.set('registrar', registrar.el);
+  alMostrar.set('registrar', registrar.activar);
   const historial = crearHistorial(() => mostrar('registrar'));
   vistas.set('historial', historial.el);
   alMostrar.set('historial', historial.activar);
-  for (const t of TABS.filter((x) => x.id !== 'registrar' && x.id !== 'historial')) {
+  const ajustes = crearAjustes();
+  vistas.set('ajustes', ajustes.el);
+  alMostrar.set('ajustes', ajustes.activar);
+  for (const t of TABS.filter((x) => !vistas.has(x.id))) {
     const v = document.createElement('section');
     v.className = 'pronto';
     v.textContent = `${t.nombre}: próximamente`;

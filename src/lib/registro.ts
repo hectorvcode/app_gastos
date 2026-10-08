@@ -1,13 +1,21 @@
 import type { Gasto } from '../types';
 import { generarUuid } from './compat';
 import { addDays, buildFechaIso, dateKey } from './dates';
-import { applyKey, entryToNumber, type Key } from './money';
+import { adaptarEntry, applyKey, entryToNumber, type Key } from './money';
+import { recortarNota } from './nota';
 
 export const REINICIO_FECHA_MS = 10 * 60 * 1000;
 
 export interface RepoGastos {
   add(gasto: Gasto): Promise<void>;
   delete(id: string): Promise<void>;
+}
+
+/** Lo necesario para revertir un cambio de moneda que descartó decimales. */
+export interface CambioMoneda {
+  previa: { moneda: string; entry: string };
+  /** Decimales que no caben en la nueva moneda (vacío si no se perdió nada). */
+  descartados: string;
 }
 
 export type ResultadoGuardado =
@@ -20,6 +28,8 @@ export type ResultadoGuardado =
  */
 export class SesionRegistro {
   entry = '';
+  /** Nota pendiente: se guarda con el siguiente gasto y luego se limpia. */
+  nota = '';
   /** null = "Hoy" (sigue al reloj, incluso pasada la medianoche). */
   private fechaElegida: string | null = null;
   private ultimaActividad: number;
@@ -60,6 +70,28 @@ export class SesionRegistro {
     this.ultimaActividad = this.reloj().getTime();
   }
 
+  ponerNota(texto: string): void {
+    this.nota = recortarNota(texto);
+  }
+
+  /**
+   * Cambia la moneda. Si el monto en curso tiene decimales que la nueva moneda no admite,
+   * se truncan y se devuelve lo descartado y el estado previo para avisar y poder deshacer.
+   */
+  cambiarMoneda(moneda: string): CambioMoneda | null {
+    if (moneda === this.moneda) return null;
+    const previa = { moneda: this.moneda, entry: this.entry };
+    const r = adaptarEntry(this.entry, moneda);
+    this.moneda = moneda;
+    this.entry = r.entry;
+    return { previa, descartados: r.descartados };
+  }
+
+  restaurarMoneda(previa: CambioMoneda['previa']): void {
+    this.moneda = previa.moneda;
+    this.entry = previa.entry;
+  }
+
   pulsar(key: Key): void {
     this.entry = applyKey(this.entry, key, this.moneda);
   }
@@ -72,6 +104,7 @@ export class SesionRegistro {
     const monto = entryToNumber(this.entry);
     if (monto <= 0) return { ok: false };
     const entryPrevio = this.entry;
+    const notaPrevia = this.nota;
     const gastoPrevio = this.ultimoGastoId;
     const actividadPrevia = this.ultimaActividad;
     try {
@@ -84,7 +117,7 @@ export class SesionRegistro {
         monto,
         moneda: this.moneda,
         categoriaId,
-        nota: '',
+        nota: recortarNota(notaPrevia.trim()),
         fotoId: null,
         creadoEn: iso,
         editadoEn: iso,
@@ -93,12 +126,14 @@ export class SesionRegistro {
       // El monto se limpia antes de esperar a la base de datos: un segundo toque
       // inmediato no puede guardar el mismo importe dos veces.
       this.entry = '';
+      this.nota = '';
       this.ultimoGastoId = gasto.id;
       this.ultimaActividad = ahora.getTime();
       await this.repo.add(gasto);
       return { ok: true, gasto, fechaKey, esHoy: fechaKey === this.hoy };
     } catch (e) {
       if (this.entry === '') this.entry = entryPrevio;
+      if (this.nota === '') this.nota = notaPrevia;
       this.ultimoGastoId = gastoPrevio;
       this.ultimaActividad = actividadPrevia;
       throw e;

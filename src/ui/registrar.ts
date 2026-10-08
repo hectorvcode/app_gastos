@@ -1,10 +1,19 @@
-import { db, getAjuste } from '../db';
+import { db, repoAjustes } from '../db';
 import { addDays, dayMonthLabel, shortLabel } from '../lib/dates';
 import { mensajeDeError } from '../lib/compat';
-import { formatEntry, entryToNumber, type Key } from '../lib/money';
-import { aplicarTeclaFisica, SesionRegistro } from '../lib/registro';
+import { formatEntryPartes, entryToNumber, simboloMoneda, formatMonto, teclaExtra, type Key } from '../lib/money';
+import {
+  CATALOGO_MONEDAS,
+  cargarConfigMonedas,
+  guardarUltimaMoneda,
+  resolverMonedaInicial,
+  type ConfigMonedas,
+} from '../lib/monedas';
+import { MAX_NOTA } from '../lib/nota';
+import { aplicarTeclaFisica, SesionRegistro, type CambioMoneda } from '../lib/registro';
 import type { Categoria } from '../types';
 import { mostrarError } from './avisos';
+import { cerrarTecladoConEnter } from './teclado';
 
 const DESHACER_MS = 5000;
 
@@ -18,7 +27,7 @@ const TECLAS: { key: Key; label: string; aria?: string }[] = [
   { key: '7', label: '7' },
   { key: '8', label: '8' },
   { key: '9', label: '9' },
-  { key: '00', label: '00' },
+  { key: '.', label: '', aria: '' }, // tecla "00" / "," según la moneda (ver pintarMoneda)
   { key: '0', label: '0' },
   { key: 'back', label: '⌫', aria: 'Borrar' },
 ];
@@ -39,8 +48,15 @@ function sinFoco(e: Event): void {
   (e.currentTarget as HTMLElement | null)?.blur();
 }
 
-export async function crearRegistrar(): Promise<HTMLElement> {
-  const moneda = await getAjuste('monedaPredeterminada', 'COP');
+export interface VistaRegistrar {
+  el: HTMLElement;
+  /** Relee los ajustes de monedas; se llama cada vez que se abre la pestaña. */
+  activar(): Promise<void>;
+}
+
+export async function crearRegistrar(): Promise<VistaRegistrar> {
+  let config: ConfigMonedas = await cargarConfigMonedas(repoAjustes);
+  const moneda = resolverMonedaInicial(await repoAjustes.get('ultimaMoneda'), config);
   const sesion = new SesionRegistro(moneda, {
     add: async (g) => void (await db.gastos.add(g)),
     delete: (id) => db.gastos.delete(id),
@@ -53,24 +69,31 @@ export async function crearRegistrar(): Promise<HTMLElement> {
   const chips = el('div', 'chips');
   const chipFecha = el('button', 'chip');
   chipFecha.type = 'button';
-  const chipMoneda = el('span', 'chip chip-info', moneda);
-  chips.append(chipFecha, chipMoneda);
+  const chipMoneda = el('button', 'chip');
+  chipMoneda.type = 'button';
+  const chipNota = el('button', 'chip');
+  chipNota.type = 'button';
+  chips.append(chipFecha, chipMoneda, chipNota);
 
   // --- Monto ---
   const monto = el('div', 'monto');
   monto.setAttribute('role', 'status');
   const montoSimbolo = el('span', 'monto-simbolo', '$');
   const montoValor = el('span', 'monto-valor');
-  monto.append(montoSimbolo, montoValor);
+  const montoRelleno = el('span', 'monto-relleno');
+  monto.append(montoSimbolo, montoValor, montoRelleno);
 
   // --- Teclado ---
   const teclado = el('div', 'teclado');
+  let teclaExtraBtn: HTMLButtonElement | undefined;
   for (const t of TECLAS) {
     const b = el('button', 'tecla', t.label);
     b.type = 'button';
     if (t.aria) b.setAttribute('aria-label', t.aria);
+    const esExtra = t.label === '';
+    if (esExtra) teclaExtraBtn = b;
     b.addEventListener('click', (e) => {
-      sesion.pulsar(t.key);
+      sesion.pulsar(esExtra ? teclaExtra(sesion.moneda).key : t.key);
       pintarMonto();
       sinFoco(e);
     });
@@ -88,13 +111,22 @@ export async function crearRegistrar(): Promise<HTMLElement> {
   toastDeshacer.type = 'button';
   toast.append(toastTexto, toastDeshacer);
 
-  // --- Hoja de fecha ---
+  // --- Aviso de decimales descartados al cambiar de moneda ---
+  const avisoMoneda = el('div', 'toast');
+  avisoMoneda.hidden = true;
+  const avisoMonedaTexto = el('span');
+  const avisoMonedaDeshacer = el('button', 'toast-btn', 'Deshacer');
+  avisoMonedaDeshacer.type = 'button';
+  avisoMoneda.append(avisoMonedaTexto, avisoMonedaDeshacer);
+  let avisoMonedaTimer: number | undefined;
+
+  // --- Hoja (fecha, moneda y nota) ---
   const hoja = el('div', 'hoja');
   hoja.hidden = true;
   const hojaPanel = el('div', 'hoja-panel');
   hoja.append(hojaPanel);
 
-  root.append(chips, monto, teclado, grid, toast, hoja);
+  root.append(chips, monto, teclado, grid, toast, avisoMoneda, hoja);
 
   // ---------- Pintado ----------
   function pintarFecha(): void {
@@ -104,8 +136,28 @@ export async function crearRegistrar(): Promise<HTMLElement> {
     chipFecha.classList.toggle('chip-alerta', !esHoy);
   }
 
+  function pintarMoneda(): void {
+    chipMoneda.textContent = `💱 ${sesion.moneda}`;
+    chipMoneda.classList.toggle('chip-alerta', sesion.moneda !== config.predeterminada);
+    montoSimbolo.textContent = simboloMoneda(sesion.moneda);
+    if (teclaExtraBtn) {
+      const extra = teclaExtra(sesion.moneda);
+      teclaExtraBtn.textContent = extra.label;
+      teclaExtraBtn.setAttribute('aria-label', extra.aria);
+    }
+  }
+
+  function pintarNota(): void {
+    const hay = sesion.nota !== '';
+    chipNota.textContent = hay ? '📝 Nota ●' : '📝 Nota';
+    chipNota.classList.toggle('chip-alerta', hay);
+    chipNota.setAttribute('aria-label', hay ? 'Nota pendiente para el próximo gasto' : 'Agregar nota');
+  }
+
   function pintarMonto(): void {
-    montoValor.textContent = formatEntry(sesion.entry);
+    const partes = formatEntryPartes(sesion.entry, sesion.moneda);
+    montoValor.textContent = partes.escrito;
+    montoRelleno.textContent = partes.relleno;
     monto.classList.toggle('vacio', entryToNumber(sesion.entry) === 0);
   }
 
@@ -144,12 +196,14 @@ export async function crearRegistrar(): Promise<HTMLElement> {
     try {
       const promesa = sesion.guardar(cat.id);
       pintarMonto(); // el monto ya se limpió; la base de datos termina en segundo plano
+      pintarNota();
       const r = await promesa;
       if (!r.ok) return;
       pintarFecha();
       mostrarToast(r.esHoy ? 'Guardado' : `Guardado el ${dayMonthLabel(r.fechaKey)}`);
     } catch (e) {
-      pintarMonto(); // la sesión conserva el monto escrito
+      pintarMonto(); // la sesión conserva el monto y la nota escritos
+      pintarNota();
       mostrarError(`No se pudo guardar: ${mensajeDeError(e)}`);
     }
   }
@@ -174,6 +228,9 @@ export async function crearRegistrar(): Promise<HTMLElement> {
   function cerrarHoja(): void {
     hoja.hidden = true;
     pintarFecha();
+    pintarMoneda();
+    pintarNota();
+    pintarMonto();
   }
 
   function abrirHoja(): void {
@@ -218,7 +275,7 @@ export async function crearRegistrar(): Promise<HTMLElement> {
 
     const cerrar = el('button', 'hoja-op hoja-cerrar', 'Cancelar');
     cerrar.type = 'button';
-    cerrar.addEventListener('click', () => (hoja.hidden = true));
+    cerrar.addEventListener('click', cerrarHoja);
 
     hojaPanel.replaceChildren(...botones, otra, input, cerrar);
     hoja.hidden = false;
@@ -229,7 +286,110 @@ export async function crearRegistrar(): Promise<HTMLElement> {
     abrirHoja();
   });
   hoja.addEventListener('click', (e) => {
-    if (e.target === hoja) hoja.hidden = true;
+    if (e.target === hoja) cerrarHoja();
+  });
+
+  // ---------- Selector de moneda ----------
+  async function persistirMoneda(): Promise<void> {
+    try {
+      await guardarUltimaMoneda(repoAjustes, sesion.moneda);
+    } catch (e) {
+      mostrarError(`No se pudo recordar la moneda elegida: ${mensajeDeError(e)}`);
+    }
+  }
+
+  /** Aplica el cambio y, si se descartaron decimales, lo avisa con opción de deshacer. */
+  function aplicarMoneda(codigo: string): void {
+    const cambio = sesion.cambiarMoneda(codigo);
+    if (!cambio) return;
+    void persistirMoneda();
+    pintarMoneda();
+    pintarMonto();
+    if (cambio.descartados !== '') avisarDecimales(cambio);
+  }
+
+  function avisarDecimales(cambio: CambioMoneda): void {
+    const antes = formatMonto(entryToNumber(cambio.previa.entry), cambio.previa.moneda);
+    const ahora = formatMonto(entryToNumber(sesion.entry), sesion.moneda);
+    window.clearTimeout(avisoMonedaTimer);
+    avisoMonedaTexto.textContent = `${sesion.moneda} no usa decimales: ${antes} → ${ahora}`;
+    avisoMoneda.hidden = false;
+    avisoMonedaDeshacer.onclick = () => {
+      window.clearTimeout(avisoMonedaTimer);
+      avisoMoneda.hidden = true;
+      sesion.restaurarMoneda(cambio.previa);
+      void persistirMoneda();
+      pintarMoneda();
+      pintarMonto();
+    };
+    avisoMonedaTimer = window.setTimeout(() => (avisoMoneda.hidden = true), 8000);
+  }
+
+  function abrirHojaMoneda(): void {
+    const nombres = new Map(CATALOGO_MONEDAS.map((m) => [m.codigo, m.nombre]));
+    const botones = config.visibles.map((codigo) => {
+      const pred = codigo === config.predeterminada ? ' · predeterminada' : '';
+      const b = el('button', 'hoja-op', `${codigo} · ${nombres.get(codigo) ?? codigo}${pred}`);
+      b.type = 'button';
+      b.classList.toggle('activa', codigo === sesion.moneda);
+      b.addEventListener('click', () => {
+        aplicarMoneda(codigo);
+        cerrarHoja();
+      });
+      return b;
+    });
+    const cerrar = el('button', 'hoja-op hoja-cerrar', 'Cancelar');
+    cerrar.type = 'button';
+    cerrar.addEventListener('click', cerrarHoja);
+    hojaPanel.replaceChildren(...botones, cerrar);
+    hoja.hidden = false;
+  }
+
+  chipMoneda.addEventListener('click', (e) => {
+    sinFoco(e);
+    abrirHojaMoneda();
+  });
+
+  // ---------- Nota ----------
+  function abrirHojaNota(): void {
+    const titulo = el('h2', 'hoja-titulo', 'Nota del próximo gasto');
+    const campo = el('input', 'nota-input');
+    campo.type = 'text';
+    campo.maxLength = MAX_NOTA;
+    campo.autocomplete = 'off';
+    campo.placeholder = 'Ej. Almuerzo con equipo';
+    campo.value = sesion.nota;
+    campo.setAttribute('aria-label', 'Nota');
+    cerrarTecladoConEnter(campo);
+    const contador = el('p', 'hoja-ayuda');
+    const pintarContador = (): void => {
+      contador.textContent = `${campo.value.length}/${MAX_NOTA}`;
+    };
+    pintarContador();
+    // Lo escrito se guarda en la sesión al instante: tocar fuera de la hoja no pierde nada.
+    campo.addEventListener('input', () => {
+      sesion.ponerNota(campo.value);
+      pintarContador();
+    });
+    const listo = el('button', 'btn-primario', 'Listo');
+    listo.type = 'button';
+    listo.addEventListener('click', cerrarHoja);
+    const borrar = el('button', 'hoja-op hoja-cerrar', 'Quitar nota');
+    borrar.type = 'button';
+    borrar.addEventListener('click', () => {
+      sesion.ponerNota('');
+      cerrarHoja();
+    });
+    const pie = el('div', 'hoja-pie');
+    pie.append(listo, borrar);
+    hojaPanel.replaceChildren(titulo, campo, contador, pie);
+    hoja.hidden = false;
+    hojaPanel.scrollTop = 0;
+  }
+
+  chipNota.addEventListener('click', (e) => {
+    sinFoco(e);
+    abrirHojaNota();
   });
 
   // ---------- Teclado físico ----------
@@ -249,8 +409,17 @@ export async function crearRegistrar(): Promise<HTMLElement> {
     if (!document.hidden) pintarFecha();
   });
 
+  async function activar(): Promise<void> {
+    config = await cargarConfigMonedas(repoAjustes);
+    // Si Ajustes ocultó la moneda en uso, se pasa a la predeterminada (con aviso si pierde decimales).
+    if (!config.visibles.includes(sesion.moneda)) aplicarMoneda(config.predeterminada);
+    else pintarMoneda();
+  }
+
   pintarMonto();
   pintarFecha();
+  pintarMoneda();
+  pintarNota();
   await pintarCategorias();
-  return root;
+  return { el: root, activar };
 }

@@ -55,3 +55,13 @@ export async function getAjuste<T>(clave: string, porDefecto: T): Promise<T> {
   const fila = await db.ajustes.get(clave);
   return fila ? (fila.valor as T) : porDefecto;
 }
+
+export async function setAjuste(clave: string, valor: unknown): Promise<void> {
+  await db.ajustes.put({ clave, valor });
+}
+
+/** Ajustes en la forma que usa `lib/monedas.ts`. */
+export const repoAjustes = {
+  get: (clave: string): Promise<unknown> => getAjuste<unknown>(clave, undefined),
+  set: setAjuste,
+};
