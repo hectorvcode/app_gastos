@@ -87,15 +87,17 @@ export async function guardarCuentaPredeterminada(repo: RepoAjustesCuentas, cuen
 /** `cuentas` es la lista completa (con `orden` renumerado) que hay que guardar. */
 export type ResultadoCuentas = { ok: true; cuentas: Cuenta[] } | { ok: false; error: string };
 
+const MSG_NO_EXISTE = 'Esa cuenta ya no existe. Cambia de pestaña y vuelve a Ajustes para actualizar la lista.';
+
 const renumerar = (lista: readonly Cuenta[]): Cuenta[] => lista.map((c, orden) => ({ ...c, orden }));
 const clave = (nombre: string): string => nombre.trim().toLocaleLowerCase('es');
 
 function validarNombre(cuentas: readonly Cuenta[], nombre: string, idActual: string | null): string | null {
   const limpio = nombre.trim().replace(/\s+/g, ' ');
-  if (limpio === '') return 'Escribe un nombre para la cuenta.';
-  if (limpio.length > MAX_NOMBRE_CUENTA) return `El nombre admite hasta ${MAX_NOMBRE_CUENTA} caracteres.`;
+  if (limpio === '') return 'Escribe un nombre para la cuenta (por ejemplo Hogar).';
+  if (limpio.length > MAX_NOMBRE_CUENTA) return `El nombre admite hasta ${MAX_NOMBRE_CUENTA} caracteres. Acórtalo.`;
   if (cuentas.some((c) => c.id !== idActual && clave(c.nombre) === clave(limpio))) {
-    return 'Ya existe una cuenta con ese nombre.';
+    return 'Ya existe una cuenta con ese nombre. Escribe uno distinto.';
   }
   return null;
 }
@@ -124,7 +126,7 @@ export function editarCuenta(
   cambios: { nombre?: string; emoji?: string },
 ): ResultadoCuentas {
   const actual = cuentas.find((c) => c.id === id);
-  if (!actual) return { ok: false, error: 'Esa cuenta ya no existe.' };
+  if (!actual) return { ok: false, error: MSG_NO_EXISTE };
   let nombre = actual.nombre;
   if (cambios.nombre !== undefined) {
     const error = validarNombre(cuentas, cambios.nombre, id);
@@ -142,38 +144,48 @@ export function editarCuenta(
 export function moverCuenta(cuentas: readonly Cuenta[], id: string, direccion: -1 | 1): ResultadoCuentas {
   const lista = ordenadas(cuentas);
   const i = lista.findIndex((c) => c.id === id);
-  if (i < 0) return { ok: false, error: 'Esa cuenta ya no existe.' };
+  if (i < 0) return { ok: false, error: MSG_NO_EXISTE };
   let j = i + direccion;
   while (j >= 0 && j < lista.length && lista[j]!.archivada !== lista[i]!.archivada) j += direccion;
-  if (j < 0 || j >= lista.length) return { ok: true, cuentas: renumerar(lista) };
+  if (j < 0 || j >= lista.length) {
+    return {
+      ok: false,
+      error: direccion < 0 ? 'Esa cuenta ya es la primera de la lista.' : 'Esa cuenta ya es la última de la lista.',
+    };
+  }
   [lista[i], lista[j]] = [lista[j]!, lista[i]!];
   return { ok: true, cuentas: renumerar(lista) };
 }
 
 /** Valida que `id` pueda ser la predeterminada (existe y está activa). */
-export function validarPredeterminada(cuentas: readonly Cuenta[], id: string): { ok: true } | { ok: false; error: string } {
+export function validarPredeterminada(
+  cuentas: readonly Cuenta[],
+  id: string,
+  actual?: string,
+): { ok: true } | { ok: false; error: string } {
   const c = cuentas.find((x) => x.id === id);
-  if (!c) return { ok: false, error: 'Esa cuenta ya no existe.' };
-  if (c.archivada) return { ok: false, error: 'Una cuenta archivada no puede ser la predeterminada.' };
+  if (!c) return { ok: false, error: MSG_NO_EXISTE };
+  if (id === actual) return { ok: false, error: `${c.nombre} ya es la cuenta predeterminada. Para cambiarla, elige otra cuenta.` };
+  if (c.archivada) return { ok: false, error: 'Una cuenta archivada no puede ser la predeterminada. Desarchívala primero.' };
   return { ok: true };
 }
 
 /** No se archiva la predeterminada, y siempre debe quedar al menos una cuenta activa. */
 export function archivarCuenta(cuentas: readonly Cuenta[], id: string, predeterminada: string): ResultadoCuentas {
   const c = cuentas.find((x) => x.id === id);
-  if (!c) return { ok: false, error: 'Esa cuenta ya no existe.' };
+  if (!c) return { ok: false, error: MSG_NO_EXISTE };
   if (c.archivada) return { ok: true, cuentas: ordenadas(cuentas) };
   if (id === predeterminada) {
-    return { ok: false, error: 'La cuenta predeterminada no se puede archivar. Elige otra como predeterminada primero.' };
+    return { ok: false, error: 'No puedes archivar la cuenta predeterminada. Elige otra como predeterminada primero.' };
   }
   if (cuentasActivas(cuentas).filter((x) => x.id !== id).length === 0) {
-    return { ok: false, error: 'Debe quedar al menos una cuenta activa.' };
+    return { ok: false, error: 'Debe quedar al menos una cuenta activa. Crea o desarchiva otra primero.' };
   }
   return { ok: true, cuentas: ordenadas(cuentas).map((x) => (x.id === id ? { ...x, archivada: true } : x)) };
 }
 
 export function desarchivarCuenta(cuentas: readonly Cuenta[], id: string): ResultadoCuentas {
-  if (!cuentas.some((x) => x.id === id)) return { ok: false, error: 'Esa cuenta ya no existe.' };
+  if (!cuentas.some((x) => x.id === id)) return { ok: false, error: MSG_NO_EXISTE };
   return { ok: true, cuentas: ordenadas(cuentas).map((x) => (x.id === id ? { ...x, archivada: false } : x)) };
 }
 
@@ -184,14 +196,14 @@ export function borrarCuenta(
   predeterminada: string,
   totalGastos: number,
 ): ResultadoCuentas {
-  if (!cuentas.some((x) => x.id === id)) return { ok: false, error: 'Esa cuenta ya no existe.' };
+  if (!cuentas.some((x) => x.id === id)) return { ok: false, error: MSG_NO_EXISTE };
   if (totalGastos > 0) {
-    return { ok: false, error: 'Esta cuenta tiene gastos: no se puede borrar, solo archivar.' };
+    return { ok: false, error: 'Esta cuenta tiene gastos y no se puede borrar. Archívala en su lugar.' };
   }
   if (id === predeterminada) {
-    return { ok: false, error: 'La cuenta predeterminada no se puede borrar. Elige otra como predeterminada primero.' };
+    return { ok: false, error: 'No puedes borrar la cuenta predeterminada. Elige otra como predeterminada primero.' };
   }
   const resto = ordenadas(cuentas).filter((x) => x.id !== id);
-  if (cuentasActivas(resto).length === 0) return { ok: false, error: 'Debe quedar al menos una cuenta activa.' };
+  if (cuentasActivas(resto).length === 0) return { ok: false, error: 'Debe quedar al menos una cuenta activa. Crea o desarchiva otra primero.' };
   return { ok: true, cuentas: renumerar(resto) };
 }

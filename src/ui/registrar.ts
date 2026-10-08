@@ -476,9 +476,12 @@ export async function crearRegistrar(): Promise<VistaRegistrar> {
     config = await cargarConfigMonedas(repoAjustes);
     cuentas = await db.cuentas.toArray();
     const estado = await cargarEstadoCuentas(repoAjustes, cuentas);
+    const cambioPredeterminada = estado.predeterminada !== cuentaPredeterminada;
     cuentaPredeterminada = estado.predeterminada;
-    // Si Ajustes archivó o borró la cuenta en uso, Registrar pasa a la predeterminada.
-    const vigente = resolverCuentaActual(sesion.cuentaId, cuentas, cuentaPredeterminada);
+    // Si Ajustes cambió la predeterminada, Registrar pasa a ella; y lo mismo si archivó o borró la cuenta en uso.
+    const vigente = cambioPredeterminada
+      ? cuentaPredeterminada
+      : resolverCuentaActual(sesion.cuentaId, cuentas, cuentaPredeterminada);
     if (vigente !== sesion.cuentaId) {
       sesion.cuentaId = vigente;
       void persistirCuenta();

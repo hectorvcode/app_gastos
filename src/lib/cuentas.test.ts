@@ -16,9 +16,11 @@ import {
   resolverCuentaActual,
   textoGuardado,
   validarPredeterminada,
+  type ResultadoCuentas,
   CUENTA_INICIAL,
   CUENTA_PERSONAL_ID,
 } from './cuentas';
+import { alternarVisible, elegirPredeterminada, normalizarConfig } from './monedas';
 import { fechaHoraAIso, rangoMes } from './dates';
 import { agruparPorDia, filtrarGastos, validarEdicion, type CambiosGasto } from './historial';
 import type { Key } from './money';
@@ -183,7 +185,7 @@ describe('reglas de borrar', () => {
   it('no borra una cuenta con gastos: solo archivar', () => {
     const r = borrarCuenta(cuentas, 'hogar', 'personal', 3);
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error).toMatch(/archivar/);
+    if (!r.ok) expect(r.error).toMatch(/Archívala/);
   });
   it('no borra la predeterminada aunque no tenga gastos', () => {
     expect(borrarCuenta(cuentas, 'personal', 'personal', 0).ok).toBe(false);
@@ -215,8 +217,7 @@ describe('crear, renombrar y reordenar', () => {
     expect(sube.ok && sube.cuentas.map((c) => c.id)).toEqual(['personal', 'negocio', 'hogar']);
     const baja = moverCuenta(lista, 'personal', 1);
     expect(baja.ok && baja.cuentas.map((c) => c.id)).toEqual(['hogar', 'personal', 'negocio']);
-    const tope = moverCuenta(lista, 'personal', -1);
-    expect(tope.ok && tope.cuentas.map((c) => c.id)).toEqual(['personal', 'hogar', 'negocio']);
+    expect(moverCuenta(lista, 'personal', -1).ok).toBe(false); // ya es la primera: avisa, no es silencioso
   });
 });
 
@@ -296,5 +297,61 @@ describe('edición de la cuenta de un gasto', () => {
       expect(r.ok && r.cambio).toBe(false);
       if (r.ok) expect(r.gasto.editadoEn).toBe(original.editadoEn);
     }
+  });
+});
+
+describe('toda regla bloqueada devuelve un mensaje que explica por qué y qué hacer', () => {
+  const activas = [PERSONAL, HOGAR];
+  const soloUna = [PERSONAL, { ...HOGAR, archivada: true }];
+
+  function mensaje(r: ResultadoCuentas | { ok: boolean; error?: string }): string {
+    expect(r.ok).toBe(false);
+    const texto = (r as { error?: string }).error ?? '';
+    expect(texto.trim().length).toBeGreaterThan(15);
+    return texto;
+  }
+
+  it('archivar la predeterminada', () => {
+    expect(mensaje(archivarCuenta(activas, 'personal', 'personal'))).toBe(
+      'No puedes archivar la cuenta predeterminada. Elige otra como predeterminada primero.',
+    );
+  });
+  it('archivar la última cuenta activa', () => {
+    expect(mensaje(archivarCuenta(soloUna, 'personal', 'otra'))).toMatch(/al menos una cuenta activa/);
+  });
+  it('archivar o editar una cuenta que ya no existe', () => {
+    expect(mensaje(archivarCuenta(activas, 'x', 'personal'))).toMatch(/ya no existe/);
+    expect(mensaje(editarCuenta(activas, 'x', { nombre: 'A' }))).toMatch(/ya no existe/);
+    expect(mensaje(desarchivarCuenta(activas, 'x'))).toMatch(/ya no existe/);
+    expect(mensaje(moverCuenta(activas, 'x', 1))).toMatch(/ya no existe/);
+    expect(mensaje(borrarCuenta(activas, 'x', 'personal', 0))).toMatch(/ya no existe/);
+    expect(mensaje(validarPredeterminada(activas, 'x'))).toMatch(/ya no existe/);
+  });
+  it('borrar con gastos, la predeterminada o la última activa', () => {
+    expect(mensaje(borrarCuenta(activas, 'hogar', 'personal', 2))).toMatch(/Archívala/);
+    expect(mensaje(borrarCuenta(activas, 'personal', 'personal', 0))).toMatch(/Elige otra como predeterminada/);
+    expect(mensaje(borrarCuenta(soloUna, 'personal', 'hogar', 0))).toMatch(/al menos una cuenta activa/);
+  });
+  it('predeterminar una archivada o la que ya lo es', () => {
+    expect(mensaje(validarPredeterminada(soloUna, 'hogar'))).toMatch(/Desarchívala/);
+    expect(mensaje(validarPredeterminada(activas, 'personal', 'personal'))).toMatch(/ya es la cuenta predeterminada/);
+  });
+  it('nombre vacío, demasiado largo o repetido', () => {
+    expect(mensaje(crearCuenta(activas, '  ', '🏠', 'n'))).toMatch(/Escribe un nombre/);
+    expect(mensaje(crearCuenta(activas, 'x'.repeat(40), '🏠', 'n'))).toMatch(/Acórtalo/);
+    expect(mensaje(crearCuenta(activas, 'hogar', '🏠', 'n'))).toMatch(/Escribe uno distinto/);
+    expect(mensaje(editarCuenta(activas, 'hogar', { nombre: 'Personal' }))).toMatch(/Escribe uno distinto/);
+  });
+  it('subir la primera o bajar la última no es silencioso', () => {
+    expect(mensaje(moverCuenta(activas, 'personal', -1))).toMatch(/primera/);
+    expect(mensaje(moverCuenta(activas, 'hogar', 1))).toMatch(/última/);
+  });
+  it('monedas: ocultar la predeterminada y moneda fuera del catálogo', () => {
+    const cfg = normalizarConfig('COP', ['COP', 'USD']);
+    expect(mensaje(alternarVisible(cfg, 'COP'))).toBe(
+      'No puedes ocultar la moneda predeterminada. Elige otra como predeterminada primero.',
+    );
+    expect(mensaje(alternarVisible(cfg, 'XXX'))).toMatch(/Elige una de la lista/);
+    expect(mensaje(elegirPredeterminada(cfg, 'XXX'))).toMatch(/Elige una de la lista/);
   });
 });

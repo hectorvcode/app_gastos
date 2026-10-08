@@ -1,5 +1,8 @@
 import { areaVisible } from '../lib/viewport';
 
+const campoEnfocado = (): boolean =>
+  document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement;
+
 /**
  * Ajuste reutilizable para el teclado en pantalla (campos de texto y número).
  *
@@ -21,7 +24,10 @@ export function instalarAjusteTeclado(): void {
       anchoRef = window.innerWidth;
       alturaRef = window.innerHeight;
     }
-    alturaRef = Math.max(alturaRef, window.innerHeight);
+    // Sin un campo de texto enfocado no puede haber teclado en pantalla: la referencia sigue
+    // a la ventana real (también cuando se achica) y nunca se marca "teclado abierto".
+    const hayCampo = campoEnfocado();
+    alturaRef = hayCampo ? Math.max(alturaRef, window.innerHeight) : window.innerHeight;
     const a = areaVisible({
       alturaReferencia: alturaRef,
       vvAlto: vv ? vv.height : null,
@@ -31,7 +37,7 @@ export function instalarAjusteTeclado(): void {
     });
     raiz.style.setProperty('--vv-alto', `${a.alto}px`);
     raiz.style.setProperty('--vv-arriba', `${a.arriba}px`);
-    raiz.classList.toggle('teclado-abierto', a.tecladoAbierto);
+    raiz.classList.toggle('teclado-abierto', a.tecladoAbierto && hayCampo);
   };
 
   vv?.addEventListener('resize', aplicar);
@@ -39,8 +45,10 @@ export function instalarAjusteTeclado(): void {
   window.addEventListener('resize', aplicar);
   window.addEventListener('orientationchange', aplicar);
   aplicar();
+  document.addEventListener('focusout', () => window.setTimeout(aplicar, 0));
 
   document.addEventListener('focusin', (e) => {
+    aplicar();
     const campo = e.target;
     if (!(campo instanceof HTMLInputElement || campo instanceof HTMLTextAreaElement)) return;
     // Espera a que el teclado termine de abrirse.

@@ -45,9 +45,9 @@ export type ResultadoConfig = { ok: true; config: ConfigMonedas } | { ok: false;
 
 /** Muestra u oculta una moneda. La predeterminada no se puede ocultar. */
 export function alternarVisible(config: ConfigMonedas, codigo: string): ResultadoConfig {
-  if (!enCatalogo(codigo)) return { ok: false, error: 'Esa moneda no está disponible.' };
+  if (!enCatalogo(codigo)) return { ok: false, error: 'Esa moneda no está disponible. Elige una de la lista.' };
   if (codigo === config.predeterminada) {
-    return { ok: false, error: 'La moneda predeterminada siempre está visible.' };
+    return { ok: false, error: 'No puedes ocultar la moneda predeterminada. Elige otra como predeterminada primero.' };
   }
   const visibles = config.visibles.includes(codigo)
     ? config.visibles.filter((c) => c !== codigo)
@@ -57,7 +57,7 @@ export function alternarVisible(config: ConfigMonedas, codigo: string): Resultad
 
 /** Cambia la predeterminada; si estaba oculta, pasa a visible. */
 export function elegirPredeterminada(config: ConfigMonedas, codigo: string): ResultadoConfig {
-  if (!enCatalogo(codigo)) return { ok: false, error: 'Esa moneda no está disponible.' };
+  if (!enCatalogo(codigo)) return { ok: false, error: 'Esa moneda no está disponible. Elige una de la lista.' };
   return { ok: true, config: normalizarConfig(codigo, config.visibles) };
 }
 

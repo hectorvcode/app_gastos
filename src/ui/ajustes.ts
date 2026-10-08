@@ -27,7 +27,7 @@ import {
   type ResultadoConfig,
 } from '../lib/monedas';
 import type { Cuenta } from '../types';
-import { mostrarError } from './avisos';
+import { mostrarAviso, mostrarError } from './avisos';
 import { cerrarTecladoConEnter } from './teclado';
 
 function el<K extends keyof HTMLElementTagNameMap>(
@@ -99,10 +99,16 @@ export function crearAjustes(): VistaAjustes {
 
   root.append(seccion, seccionCuentas, hoja, el('p', 'pronto-resto', 'Categorías, almacenamiento, exportar y respaldo: próximamente'));
 
+  /** Dice por qué se bloqueó una acción: en línea y en el aviso fijo de arriba (siempre a la vista). */
+  function avisarRegla(destino: HTMLElement, texto: string): void {
+    destino.textContent = texto;
+    mostrarAviso(texto);
+  }
+
   // ---------- Monedas ----------
   async function aplicar(r: ResultadoConfig, nuevaPredeterminada: boolean): Promise<void> {
     if (!r.ok) {
-      mensaje.textContent = r.error;
+      avisarRegla(mensaje, r.error);
       return;
     }
     try {
@@ -137,8 +143,10 @@ export function crearAjustes(): VistaAjustes {
         const btnPred = el('button', 'cat-op', esPred ? 'Predeterminada' : 'Predeterminar');
         btnPred.type = 'button';
         btnPred.setAttribute('aria-pressed', String(esPred));
-        btnPred.disabled = esPred;
-        btnPred.addEventListener('click', () => void aplicar(elegirPredeterminada(c, m.codigo), true));
+        btnPred.addEventListener('click', () => {
+          if (esPred) avisarRegla(mensaje, `${m.codigo} ya es la moneda predeterminada. Para cambiarla, elige otra moneda.`);
+          else void aplicar(elegirPredeterminada(c, m.codigo), true);
+        });
 
         fila.append(btnVisible, btnPred);
         return fila;
@@ -160,7 +168,7 @@ export function crearAjustes(): VistaAjustes {
   /** Guarda el resultado de una regla; si no se cumple, lo dice en pantalla. Devuelve true si se guardó. */
   async function aplicarCuentas(r: ResultadoCuentas, despues?: () => Promise<void>): Promise<boolean> {
     if (!r.ok) {
-      mensajeCuentas.textContent = r.error;
+      avisarRegla(mensajeCuentas, r.error);
       return false;
     }
     try {
@@ -183,13 +191,15 @@ export function crearAjustes(): VistaAjustes {
   }
 
   async function predeterminar(c: Cuenta): Promise<void> {
-    const v = validarPredeterminada(cuentas, c.id);
+    const v = validarPredeterminada(cuentas, c.id, cuentaPredeterminada);
     if (!v.ok) {
-      mensajeCuentas.textContent = v.error;
+      avisarRegla(mensajeCuentas, v.error);
       return;
     }
     try {
       await guardarCuentaPredeterminada(repoAjustes, c.id);
+      // Registrar también pasa a la nueva predeterminada, igual que con la moneda.
+      await guardarUltimaCuenta(repoAjustes, c.id);
       mensajeCuentas.textContent = '';
       await leerCuentas();
     } catch (e) {
@@ -277,6 +287,7 @@ export function crearAjustes(): VistaAjustes {
         }
         error.textContent = motivo;
         error.hidden = false;
+        mostrarAviso(motivo);
       });
       partes.push(borrar);
     }
@@ -315,7 +326,6 @@ export function crearAjustes(): VistaAjustes {
         const btnPred = el('button', 'cat-op', esPred ? 'Predeterminada' : 'Predeterminar');
         btnPred.type = 'button';
         btnPred.setAttribute('aria-pressed', String(esPred));
-        btnPred.disabled = esPred || c.archivada;
         btnPred.addEventListener('click', () => void predeterminar(c));
 
         const btnArchivo = el('button', 'cat-op', c.archivada ? 'Desarchivar' : 'Archivar');

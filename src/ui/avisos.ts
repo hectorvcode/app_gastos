@@ -6,6 +6,18 @@ let temporizador: number | undefined;
 /** Muestra un aviso de error visible en pantalla (nunca silencioso). */
 export function mostrarError(texto: string): void {
   console.error(texto);
+  mostrar(texto, false);
+}
+
+/**
+ * Aviso visible de por qué una acción quedó bloqueada por una regla (no es un fallo).
+ * Se ve siempre arriba de la pantalla, aunque el mensaje en línea quede fuera de vista.
+ */
+export function mostrarAviso(texto: string): void {
+  mostrar(texto, true);
+}
+
+function mostrar(texto: string, esRegla: boolean): void {
   if (!banner) {
     banner = document.createElement('div');
     banner.className = 'aviso-error';
@@ -22,6 +34,7 @@ export function mostrarError(texto: string): void {
   }
   const msg = banner.firstElementChild;
   if (msg) msg.textContent = texto;
+  banner.classList.toggle('aviso-regla', esRegla);
   banner.hidden = false;
   window.clearTimeout(temporizador);
   temporizador = window.setTimeout(() => {
