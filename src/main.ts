@@ -2,6 +2,7 @@ import './style.css';
 import { registerSW } from 'virtual:pwa-register';
 import { pedirPersistencia, registrarServiceWorker, mensajeDeError } from './lib/compat';
 import { instalarManejadorGlobal, mostrarError } from './ui/avisos';
+import { crearHistorial } from './ui/historial';
 import { crearRegistrar } from './ui/registrar';
 
 instalarManejadorGlobal();
@@ -27,8 +28,13 @@ async function iniciar(): Promise<void> {
   const contenido = document.createElement('main');
   contenido.className = 'contenido';
 
+  const alMostrar = new Map<string, () => Promise<void>>();
+
   vistas.set('registrar', await crearRegistrar());
-  for (const t of TABS.slice(1)) {
+  const historial = crearHistorial(() => mostrar('registrar'));
+  vistas.set('historial', historial.el);
+  alMostrar.set('historial', historial.activar);
+  for (const t of TABS.filter((x) => x.id !== 'registrar' && x.id !== 'historial')) {
     const v = document.createElement('section');
     v.className = 'pronto';
     v.textContent = `${t.nombre}: próximamente`;
@@ -40,10 +46,13 @@ async function iniciar(): Promise<void> {
   nav.className = 'tabs';
   const botones = new Map<string, HTMLButtonElement>();
 
-  const mostrar = (id: string): void => {
+  function mostrar(id: string): void {
     for (const [vid, v] of vistas) v.hidden = vid !== id;
     for (const [bid, b] of botones) b.setAttribute('aria-current', String(bid === id));
-  };
+    // Al abrir una pestaña con datos se vuelven a leer (sin recargar la página).
+    void alMostrar.get(id)?.().catch((e) => mostrarError(`No se pudo abrir la pantalla: ${mensajeDeError(e)}`));
+  }
+
 
   for (const t of TABS) {
     const b = document.createElement('button');

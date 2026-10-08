@@ -50,3 +50,50 @@ export function buildFechaIso(key: string, now: Date): string {
 export function isFuture(key: string, now: Date): boolean {
   return key > dateKey(now);
 }
+
+const MESES_LARGOS = [
+  'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
+  'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre',
+];
+
+export interface Mes {
+  anio: number;
+  /** 0 = enero */
+  mes: number;
+}
+
+export function mesDe(d: Date): Mes {
+  return { anio: d.getFullYear(), mes: d.getMonth() };
+}
+
+export function desplazarMes(m: Mes, delta: number): Mes {
+  const d = new Date(m.anio, m.mes + delta, 1);
+  return mesDe(d);
+}
+
+/** "octubre 2026" */
+export function etiquetaMes(m: Mes): string {
+  return `${MESES_LARGOS[m.mes]} ${m.anio}`;
+}
+
+/** Rango ISO [desde, hasta) del mes en hora local, comparable con `gasto.fecha`. */
+export function rangoMes(m: Mes): { desde: string; hasta: string } {
+  return {
+    desde: new Date(m.anio, m.mes, 1).toISOString(),
+    hasta: new Date(m.anio, m.mes + 1, 1).toISOString(),
+  };
+}
+
+/** Día local (AAAA-MM-DD) y hora (HH:MM) de una fecha ISO. */
+export function isoAFechaHora(iso: string): { fecha: string; hora: string } {
+  const d = new Date(iso);
+  return { fecha: dateKey(d), hora: `${pad(d.getHours())}:${pad(d.getMinutes())}` };
+}
+
+/** Fecha ISO a partir de un día local y una hora HH:MM. */
+export function fechaHoraAIso(fecha: string, hora: string): string {
+  const d = parseDateKey(fecha);
+  const [h = 0, min = 0] = hora.split(':').map(Number);
+  d.setHours(h, min, 0, 0);
+  return d.toISOString();
+}
