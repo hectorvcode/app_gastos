@@ -257,9 +257,18 @@ button {
 }
 
 /* ---------- Hoja de fecha ---------- */
+:root {
+  /* Área realmente visible (la actualiza ui/teclado.ts según el teclado en pantalla). */
+  --vv-alto: 100dvh;
+  --vv-arriba: 0px;
+}
+
 .hoja {
   position: fixed;
-  inset: 0;
+  top: var(--vv-arriba);
+  left: 0;
+  right: 0;
+  height: var(--vv-alto);
   display: flex;
   align-items: flex-end;
   background: rgb(0 0 0 / 0.5);
@@ -270,6 +279,9 @@ button {
   display: grid;
   gap: 6px;
   width: 100%;
+  max-height: var(--vv-alto);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 12px 12px calc(12px + env(safe-area-inset-bottom));
   border-radius: 20px 20px 0 0;
   background: var(--surface);
@@ -512,9 +524,20 @@ button {
 }
 
 /* ---------- Hoja de edición ---------- */
-.hoja-editar {
-  max-height: 92dvh;
-  overflow-y: auto;
+.teclado-abierto .tabs {
+  display: none;
+}
+
+/* Pie fijo de una hoja: se queda pegado al borde inferior del área visible. */
+.hoja-pie {
+  position: sticky;
+  bottom: 0;
+  display: grid;
+  gap: 6px;
+  margin: 0 -12px;
+  padding: 8px 12px calc(12px + env(safe-area-inset-bottom));
+  background: var(--surface);
+  border-top: 1px solid var(--border);
 }
 
 .hoja-titulo {
@@ -528,7 +551,7 @@ button {
   gap: 6px;
 }
 
-.campos input:last-child {
+.campos input:first-child {
   grid-column: 1 / -1;
   font-size: 1.6rem;
   font-weight: 700;

@@ -4,8 +4,10 @@ import { pedirPersistencia, registrarServiceWorker, mensajeDeError } from './lib
 import { instalarManejadorGlobal, mostrarError } from './ui/avisos';
 import { crearHistorial } from './ui/historial';
 import { crearRegistrar } from './ui/registrar';
+import { instalarAjusteTeclado } from './ui/teclado';
 
 instalarManejadorGlobal();
+instalarAjusteTeclado();
 
 // Sin contexto seguro (http://<IP-LAN>) no hay service worker ni storage: se omiten.
 registrarServiceWorker(() => registerSW({ immediate: true }));

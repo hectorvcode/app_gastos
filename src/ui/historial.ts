@@ -19,6 +19,7 @@ import {
 import { formatMonto } from '../lib/money';
 import type { Categoria, Gasto } from '../types';
 import { mostrarError } from './avisos';
+import { cerrarTecladoConEnter } from './teclado';
 
 const FILAS_POR_LOTE = 300;
 const DESHACER_MS = 5000;
@@ -229,7 +230,8 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
     iMonto.autocomplete = 'off';
     iMonto.value = String(g.monto);
     iMonto.setAttribute('aria-label', `Monto en ${g.moneda}`);
-    campos.append(iFecha, iHora, iMonto);
+    cerrarTecladoConEnter(iMonto);
+    campos.append(iMonto, iFecha, iHora);
 
     const etiquetaMoneda = el('p', 'hoja-ayuda', `Moneda: ${g.moneda}`);
 
@@ -293,7 +295,11 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
 
     cancelar.addEventListener('click', () => (hoja.hidden = true));
 
-    panel.replaceChildren(titulo, campos, etiquetaMoneda, cats, error, guardar, borrar, cancelar);
+    // Guardar queda fijo al borde inferior de la hoja: visible aunque el teclado esté abierto.
+    const pie = el('div', 'hoja-pie');
+    pie.append(error, guardar);
+
+    panel.replaceChildren(titulo, campos, etiquetaMoneda, cats, pie, borrar, cancelar);
     hoja.hidden = false;
     panel.scrollTop = 0;
   }
