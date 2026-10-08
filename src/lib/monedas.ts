@@ -66,6 +66,15 @@ export function resolverMonedaInicial(ultima: unknown, config: ConfigMonedas): s
   return typeof ultima === 'string' && config.visibles.includes(ultima) ? ultima : config.predeterminada;
 }
 
+/**
+ * Moneda que debe usar Registrar al volver a la pestaña: si Ajustes cambió la predeterminada,
+ * pasa a la nueva; si no, conserva la actual mientras siga visible, o cae en la predeterminada.
+ */
+export function resolverMonedaAlActivar(actual: string, config: ConfigMonedas, predeterminadaPrevia: string): string {
+  if (config.predeterminada !== predeterminadaPrevia) return config.predeterminada;
+  return config.visibles.includes(actual) ? actual : config.predeterminada;
+}
+
 /** Acceso a los ajustes (clave-valor); en producción es la tabla `ajustes` de Dexie. */
 export interface RepoAjustes {
   get(clave: string): Promise<unknown>;

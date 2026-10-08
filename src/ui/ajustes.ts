@@ -1,5 +1,6 @@
 import { db, repoAjustes } from '../db';
 import { generarUuid, mensajeDeError } from '../lib/compat';
+import { modoReciboActivo } from '../lib/fotos';
 import {
   archivarCuenta,
   borrarCuenta,
@@ -47,7 +48,7 @@ export interface VistaAjustes {
   activar(): Promise<void>;
 }
 
-/** Ajustes: secciones "Monedas" y "Cuentas" (el resto llega en la Fase 7). */
+/** Ajustes: secciones "Monedas", "Cuentas" y "Fotos" (el resto llega en la Fase 7). */
 export function crearAjustes(): VistaAjustes {
   let config: ConfigMonedas | null = null;
   let cuentas: Cuenta[] = [];
@@ -89,6 +90,40 @@ export function crearAjustes(): VistaAjustes {
     btnNueva,
   );
 
+  // ---------- Sección Fotos ----------
+  const seccionFotos = el('div', 'ajustes-seccion');
+  const btnModoRecibo = el('button', 'cat-op fila-interruptor');
+  btnModoRecibo.type = 'button';
+  btnModoRecibo.setAttribute('role', 'switch');
+  seccionFotos.append(
+    el('h2', 'hoja-titulo', 'Fotos'),
+    el(
+      'p',
+      'hoja-ayuda',
+      'Modo recibo: guarda la foto en escala de grises y con un poco más de contraste, para que se lean mejor los montos y el texto con menos peso. Desactívalo si prefieres fotos a color. Solo afecta a las fotos nuevas.',
+    ),
+    btnModoRecibo,
+  );
+  let modoRecibo = true;
+
+  function pintarModoRecibo(): void {
+    btnModoRecibo.textContent = modoRecibo ? 'Modo recibo: activado' : 'Modo recibo: desactivado (a color)';
+    btnModoRecibo.setAttribute('aria-checked', String(modoRecibo));
+    btnModoRecibo.setAttribute('aria-pressed', String(modoRecibo));
+  }
+
+  btnModoRecibo.addEventListener('click', async () => {
+    const nuevo = !modoRecibo;
+    try {
+      await repoAjustes.set('modoRecibo', nuevo);
+    } catch (e) {
+      mostrarError(`No se pudo guardar el modo recibo: ${mensajeDeError(e)}`);
+      return;
+    }
+    modoRecibo = nuevo;
+    pintarModoRecibo();
+  });
+
   const hoja = el('div', 'hoja');
   hoja.hidden = true;
   const hojaPanel = el('div', 'hoja-panel');
@@ -97,7 +132,7 @@ export function crearAjustes(): VistaAjustes {
     if (e.target === hoja) hoja.hidden = true;
   });
 
-  root.append(seccion, seccionCuentas, hoja, el('p', 'pronto-resto', 'Categorías, almacenamiento, exportar y respaldo: próximamente'));
+  root.append(seccion, seccionCuentas, seccionFotos, hoja, el('p', 'pronto-resto', 'Categorías, almacenamiento, exportar y respaldo: próximamente'));
 
   /** Dice por qué se bloqueó una acción: en línea y en el aviso fijo de arriba (siempre a la vista). */
   function avisarRegla(destino: HTMLElement, texto: string): void {
@@ -346,6 +381,8 @@ export function crearAjustes(): VistaAjustes {
     mensaje.textContent = '';
     mensajeCuentas.textContent = '';
     pintar();
+    modoRecibo = modoReciboActivo(await repoAjustes.get('modoRecibo'));
+    pintarModoRecibo();
     await leerCuentas();
   }
 

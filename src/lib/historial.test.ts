@@ -163,22 +163,60 @@ describe('validarEdicion', () => {
 });
 
 describe('eliminarGasto', () => {
-  it('borra y deshacer lo restaura idéntico', async () => {
-    const guardados = new Map<string, Gasto>();
+  function entorno(g: Gasto) {
+    const guardados = new Map<string, Gasto>([[g.id, g]]);
+    const fotos = new Set<string>(g.fotoId ? [g.fotoId] : []);
     const repo = {
-      add: async (g: Gasto) => void guardados.set(g.id, g),
+      add: async (x: Gasto) => void guardados.set(x.id, x),
       delete: async (id: string) => void guardados.delete(id),
+      borrarFoto: async (id: string) => void fotos.delete(id),
     };
+    return { guardados, fotos, repo };
+  }
+  it('borra y deshacer lo restaura idéntico', async () => {
     const g = gasto({ nota: 'almuerzo' });
-    guardados.set(g.id, g);
-    const deshacer = await eliminarGasto(repo, g);
+    const { guardados, repo } = entorno(g);
+    const pendiente = await eliminarGasto(repo, g);
     expect(guardados.size).toBe(0);
-    await deshacer();
+    await pendiente.deshacer();
     expect(guardados.get(g.id)).toEqual(g);
+  });
+  it('la foto sigue guardada mientras dura el aviso y se elimina solo al vencer', async () => {
+    const g = gasto({ fotoId: 'f1' });
+    const { fotos, repo } = entorno(g);
+    const pendiente = await eliminarGasto(repo, g);
+    expect(fotos.has('f1')).toBe(true);
+    await pendiente.confirmar();
+    expect(fotos.has('f1')).toBe(false);
+  });
+  it('deshacer recupera también la foto y confirmar después ya no la borra', async () => {
+    const g = gasto({ fotoId: 'f1' });
+    const { guardados, fotos, repo } = entorno(g);
+    const pendiente = await eliminarGasto(repo, g);
+    await pendiente.deshacer();
+    await pendiente.confirmar();
+    expect(guardados.get(g.id)?.fotoId).toBe('f1');
+    expect(fotos.has('f1')).toBe(true);
+  });
+  it('no se puede deshacer una vez vencido el plazo', async () => {
+    const g = gasto({ fotoId: 'f1' });
+    const { guardados, repo } = entorno(g);
+    const pendiente = await eliminarGasto(repo, g);
+    await pendiente.confirmar();
+    await expect(pendiente.deshacer()).rejects.toThrow('plazo');
+    expect(guardados.size).toBe(0);
+  });
+  it('un gasto sin foto no toca la tabla de fotos', async () => {
+    const g = gasto();
+    const { fotos, repo } = entorno(g);
+    fotos.add('otra');
+    await (await eliminarGasto(repo, g)).confirmar();
+    expect(fotos.has('otra')).toBe(true);
   });
   it('si borrar falla propaga el error y no devuelve deshacer', async () => {
     const repo = {
       add: async () => {},
+      borrarFoto: async () => {},
       delete: async () => {
         throw new Error('sin acceso');
       },

@@ -432,19 +432,30 @@ button {
 
 .fila {
   display: flex;
-  align-items: center;
-  gap: 12px;
+  align-items: stretch;
+  gap: 0;
   width: calc(100% - 20px);
   min-height: 64px;
   margin: 0 10px 4px;
-  padding: 6px 12px;
   border-radius: 14px;
   background: var(--surface);
-  text-align: left;
+  overflow: hidden;
 }
 
-.fila:active {
+.fila:has(.fila-cuerpo:active) {
   background: var(--surface-2);
+}
+
+.fila-cuerpo {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 64px;
+  padding: 6px 12px;
+  background: none;
+  text-align: left;
 }
 
 .fila-emoji {
@@ -454,11 +465,19 @@ button {
 .fila-foto {
   display: grid;
   place-items: center;
-  width: 48px;
-  height: 48px;
+  width: 64px;
+  min-height: 64px;
   flex: none;
-  border-radius: 8px;
+  padding: 0;
   background: var(--surface-2);
+  overflow: hidden;
+}
+
+.fila-foto img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 
 .fila-centro {
@@ -676,4 +695,120 @@ button {
 
 .aviso-error.aviso-regla {
   background: #b45309;
+}
+
+/* ---------- Fase 5: fotos del recibo ---------- */
+.archivo-input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+  width: 1px;
+  height: 1px;
+}
+
+.chip-miniatura {
+  width: 28px;
+  height: 28px;
+  margin-right: 6px;
+  border-radius: 6px;
+  object-fit: cover;
+}
+
+.chip:disabled {
+  opacity: 0.8;
+}
+
+.foto-seccion {
+  display: grid;
+  gap: 6px;
+}
+
+.foto-fila {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.foto-mini {
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  flex: none;
+  border-radius: 10px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.foto-mini img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.foto-estado {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.cat-op:disabled {
+  opacity: 0.5;
+}
+
+.fila-interruptor {
+  text-align: left;
+  padding: 0 18px;
+  font-size: 1.1rem;
+}
+
+/* Visor a pantalla completa (por encima de las hojas y por debajo de los avisos). */
+.visor {
+  position: fixed;
+  inset: 0;
+  z-index: 15;
+  background: #000;
+  color: #fff;
+}
+
+.visor-escenario {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  touch-action: none;
+}
+
+.visor-img {
+  max-width: 100%;
+  max-height: 100%;
+  transform-origin: center center;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.visor-cerrar {
+  position: absolute;
+  top: calc(8px + env(safe-area-inset-top));
+  left: 10px;
+  min-height: 64px;
+  padding: 0 20px;
+  border-radius: 14px;
+  background: rgb(0 0 0 / 0.65);
+  color: #fff;
+  font-size: 1.1rem;
+  font-weight: 700;
+}
+
+.visor-info {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(8px + env(safe-area-inset-bottom));
+  margin: 0;
+  text-align: center;
+  font-size: 0.75rem;
+  color: rgb(255 255 255 / 0.8);
+  text-shadow: 0 1px 3px #000;
+  pointer-events: none;
 }

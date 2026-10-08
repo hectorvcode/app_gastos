@@ -7,6 +7,7 @@ import {
   guardarConfigMonedas,
   guardarUltimaMoneda,
   normalizarConfig,
+  resolverMonedaAlActivar,
   resolverMonedaInicial,
   type RepoAjustes,
 } from './monedas';
@@ -85,5 +86,20 @@ describe('ultimaMoneda', () => {
     expect(await cargarMonedaInicial(repo)).toBe('COP');
     expect(resolverMonedaInicial('EUR', porDefecto)).toBe('EUR');
     expect(resolverMonedaInicial(42, porDefecto)).toBe('COP');
+  });
+});
+
+describe('moneda de Registrar al volver a la pestaña', () => {
+  const cop = normalizarConfig('COP', ['COP', 'USD', 'EUR']);
+  it('si Ajustes cambió la predeterminada, Registrar pasa a ella aunque la actual siga visible', () => {
+    const nueva = normalizarConfig('USD', ['COP', 'USD', 'EUR']);
+    expect(resolverMonedaAlActivar('COP', nueva, 'COP')).toBe('USD');
+  });
+  it('si la predeterminada no cambió, conserva la moneda elegida en Registrar', () => {
+    expect(resolverMonedaAlActivar('EUR', cop, 'COP')).toBe('EUR');
+  });
+  it('si la moneda en uso quedó oculta, cae en la predeterminada', () => {
+    const sinEur = normalizarConfig('COP', ['COP', 'USD']);
+    expect(resolverMonedaAlActivar('EUR', sinEur, 'COP')).toBe('COP');
   });
 });

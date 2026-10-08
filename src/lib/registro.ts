@@ -1,14 +1,18 @@
-import type { Gasto } from '../types';
+import type { Foto, Gasto } from '../types';
 import { generarUuid } from './compat';
 import { CUENTA_PERSONAL_ID } from './cuentas';
 import { addDays, buildFechaIso, dateKey } from './dates';
+import type { InstantaneaRegistro } from './borrador';
+import { fotoDesdeProcesada, type FotoProcesada } from './fotos';
 import { adaptarEntry, applyKey, entryToNumber, type Key } from './money';
 import { recortarNota } from './nota';
 
 export const REINICIO_FECHA_MS = 10 * 60 * 1000;
 
 export interface RepoGastos {
-  add(gasto: Gasto): Promise<void>;
+  /** Guarda el gasto y su foto (si hay) de forma atómica: o se guardan las dos o ninguna. */
+  add(gasto: Gasto, foto: Foto | null): Promise<void>;
+  /** Borra el gasto y su foto. */
   delete(id: string): Promise<void>;
 }
 
@@ -31,6 +35,8 @@ export class SesionRegistro {
   entry = '';
   /** Nota pendiente: se guarda con el siguiente gasto y luego se limpia. */
   nota = '';
+  /** Foto pendiente: se guarda con el siguiente gasto y luego se limpia (igual que la nota). */
+  foto: FotoProcesada | null = null;
   /** Cuenta en la que se guarda el siguiente gasto; la fija la UI al abrir y al elegir. */
   cuentaId: string = CUENTA_PERSONAL_ID;
   /** null = "Hoy" (sigue al reloj, incluso pasada la medianoche). */
@@ -77,6 +83,38 @@ export class SesionRegistro {
     this.nota = recortarNota(texto);
   }
 
+  ponerFoto(foto: FotoProcesada | null): void {
+    this.foto = foto;
+  }
+
+  /** Lo que hay escrito ahora, para el borrador (fecha null = Hoy). */
+  instantanea(): InstantaneaRegistro {
+    const fecha = this.fechaActual;
+    return {
+      entry: this.entry,
+      moneda: this.moneda,
+      fecha: fecha === this.hoy ? null : fecha,
+      cuentaId: this.cuentaId,
+      nota: this.nota,
+    };
+  }
+
+  /**
+   * Vuelve a poner lo escrito. Ignora la moneda o la cuenta que ya no estén disponibles
+   * (se queda con las actuales) y no admite fechas futuras.
+   */
+  restaurar(s: InstantaneaRegistro, monedasVisibles: readonly string[], cuentasActivas: readonly string[]): void {
+    if (monedasVisibles.includes(s.moneda)) {
+      this.moneda = s.moneda;
+      this.entry = s.entry;
+    } else {
+      this.entry = adaptarEntry(s.entry, this.moneda).entry;
+    }
+    if (cuentasActivas.includes(s.cuentaId)) this.cuentaId = s.cuentaId;
+    if (s.fecha) this.elegirFecha(s.fecha);
+    this.ponerNota(s.nota);
+  }
+
   /**
    * Cambia la moneda. Si el monto en curso tiene decimales que la nueva moneda no admite,
    * se truncan y se devuelve lo descartado y el estado previo para avisar y poder deshacer.
@@ -108,6 +146,7 @@ export class SesionRegistro {
     if (monto <= 0) return { ok: false };
     const entryPrevio = this.entry;
     const notaPrevia = this.nota;
+    const fotoPrevia = this.foto;
     const gastoPrevio = this.ultimoGastoId;
     const actividadPrevia = this.ultimaActividad;
     try {
@@ -122,7 +161,7 @@ export class SesionRegistro {
         categoriaId,
         cuentaId: this.cuentaId,
         nota: recortarNota(notaPrevia.trim()),
-        fotoId: null,
+        fotoId: fotoPrevia ? this.uuid() : null,
         creadoEn: iso,
         editadoEn: iso,
         exportadoEn: null,
@@ -131,13 +170,15 @@ export class SesionRegistro {
       // inmediato no puede guardar el mismo importe dos veces.
       this.entry = '';
       this.nota = '';
+      this.foto = null;
       this.ultimoGastoId = gasto.id;
       this.ultimaActividad = ahora.getTime();
-      await this.repo.add(gasto);
+      await this.repo.add(gasto, fotoPrevia && gasto.fotoId ? fotoDesdeProcesada(gasto.fotoId, fotoPrevia) : null);
       return { ok: true, gasto, fechaKey, esHoy: fechaKey === this.hoy };
     } catch (e) {
       if (this.entry === '') this.entry = entryPrevio;
       if (this.nota === '') this.nota = notaPrevia;
+      if (this.foto === null) this.foto = fotoPrevia;
       this.ultimoGastoId = gastoPrevio;
       this.ultimaActividad = actividadPrevia;
       throw e;

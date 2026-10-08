@@ -1,5 +1,6 @@
 import './style.css';
 import { registerSW } from 'virtual:pwa-register';
+import { limpiarHuerfanasEnDb } from './db';
 import { pedirPersistencia, registrarServiceWorker, mensajeDeError } from './lib/compat';
 import { instalarManejadorGlobal, mostrarError } from './ui/avisos';
 import { crearAjustes } from './ui/ajustes';
@@ -15,6 +16,9 @@ registrarServiceWorker(() => registerSW({ immediate: true }));
 
 // Evita que Chrome borre los datos si el teléfono se queda sin espacio.
 void pedirPersistencia();
+
+// Borra las fotos sin gasto asociado (p. ej. si la app se cerró durante un aviso de Deshacer).
+limpiarHuerfanasEnDb().catch((e) => mostrarError(`No se pudo limpiar las fotos sin gasto: ${mensajeDeError(e)}`));
 
 const TABS = [
   { id: 'registrar', icono: '➕', nombre: 'Registrar' },
@@ -32,6 +36,8 @@ async function iniciar(): Promise<void> {
   contenido.className = 'contenido';
 
   const alMostrar = new Map<string, () => Promise<void>>();
+  const alOcultar = new Map<string, () => void>();
+  let actual = '';
 
   const registrar = await crearRegistrar();
   vistas.set('registrar', registrar.el);
@@ -39,6 +45,7 @@ async function iniciar(): Promise<void> {
   const historial = crearHistorial(() => mostrar('registrar'));
   vistas.set('historial', historial.el);
   alMostrar.set('historial', historial.activar);
+  alOcultar.set('historial', historial.desactivar);
   const ajustes = crearAjustes();
   vistas.set('ajustes', ajustes.el);
   alMostrar.set('ajustes', ajustes.activar);
@@ -55,6 +62,8 @@ async function iniciar(): Promise<void> {
   const botones = new Map<string, HTMLButtonElement>();
 
   function mostrar(id: string): void {
+    if (actual && actual !== id) alOcultar.get(actual)?.(); // p. ej. libera las miniaturas de Historial
+    actual = id;
     for (const [vid, v] of vistas) v.hidden = vid !== id;
     for (const [bid, b] of botones) b.setAttribute('aria-current', String(bid === id));
     // Al abrir una pestaña con datos se vuelven a leer (sin recargar la página).

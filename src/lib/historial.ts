@@ -138,10 +138,35 @@ export function validarEdicion(original: Gasto, c: CambiosGasto, ahora: Date): R
 export interface RepoHistorial {
   add(gasto: Gasto): Promise<void>;
   delete(id: string): Promise<void>;
+  /** Elimina la foto guardada con ese id. */
+  borrarFoto(id: string): Promise<void>;
 }
 
-/** Elimina el gasto y devuelve la función que lo restaura tal como estaba. */
-export async function eliminarGasto(repo: RepoHistorial, gasto: Gasto): Promise<() => Promise<void>> {
+export interface BorradoPendiente {
+  /** Restaura el gasto (y con él su foto, que sigue guardada). */
+  deshacer(): Promise<void>;
+  /** Vence el plazo: ahora sí se elimina la foto. Se puede llamar más de una vez. */
+  confirmar(): Promise<void>;
+}
+
+/**
+ * Elimina el gasto y deja su foto guardada hasta `confirmar()` (cuando vence el aviso de Deshacer).
+ * Si la app se cierra antes, la foto queda huérfana y la limpieza del próximo inicio la borra.
+ */
+export async function eliminarGasto(repo: RepoHistorial, gasto: Gasto): Promise<BorradoPendiente> {
   await repo.delete(gasto.id);
-  return () => repo.add(gasto);
+  let estado: 'pendiente' | 'deshecho' | 'confirmado' = 'pendiente';
+  return {
+    async deshacer() {
+      if (estado === 'confirmado') throw new Error('El plazo para deshacer ya terminó.');
+      if (estado === 'deshecho') return;
+      await repo.add(gasto);
+      estado = 'deshecho';
+    },
+    async confirmar() {
+      if (estado !== 'pendiente') return;
+      estado = 'confirmado';
+      if (gasto.fotoId) await repo.borrarFoto(gasto.fotoId);
+    },
+  };
 }

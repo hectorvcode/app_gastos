@@ -154,7 +154,7 @@ Cada fase termina con algo que se puede probar en el celular; Claude Code debe h
    - [ ] Historial filtra por cuenta combinado con mes y categoría; los totales por día respetan el filtro y siguen separados por moneda.
    - [ ] Una cuenta con gastos no se puede borrar, solo archivar; siempre queda una cuenta activa.
 5. **Fotos del recibo.** Cámara, compresión, miniatura en historial, visor a pantalla completa.
-   - [ ] Cada foto guardada pesa menos de 400 KB.
+   - [ ] Cada foto guardada pesa menos de 500 KB, salvo cuando no se pueda sin bajar de calidad 0,6 o de 900 px de lado corto; en ese caso se guarda igual.
 6. **Exportación.** CSV y ZIP, menú Compartir, "Solo nuevos".
    - [ ] El CSV se importa en Google Sheets con fechas y montos reconocidos como tales.
    - [ ] Exportar "Solo nuevos" dos veces seguidas genera un segundo archivo vacío.
@@ -173,6 +173,8 @@ Cada fase se prueba primero en la laptop y después en el celular, sin instalar 
 | 2a. Celular por Wi‑Fi | Chrome Android, misma red | `npm run dev -- --host`, abrir la IP que indique Claude Code (p. ej. `http://192.168.1.20:5173`) | Interfaz con el dedo, teclado, cámara real, compartir | Sin HTTPS: no hay modo offline ni instalación |
 | 2b. Celular por USB | Chrome Android con depuración USB | `chrome://inspect` en la laptop → Port forwarding `5173 → localhost:5173`; abrir `localhost:5173` en el celular | Todo lo anterior + modo offline, y depurar el celular desde la laptop | Requiere activar Opciones de desarrollador |
 | 3. Celular en línea | Chrome Android, URL de GitHub Pages | Abrir la URL sin tocar "Instalar app" | Verificación final de la fase, igual a la app real | Ninguno |
+
+**Pruebas con la cámara (nivel 2a).** No uses `npm run dev -- --host` para probar la cámara: el cliente de Vite en desarrollo recarga la página al volver de la cámara y se pierden el monto y la foto. Haz las pruebas con cámara con `npm run build` y `npm run preview -- --host`, y abre `http://<IP-LAN>:4173/app_gastos/` (puerto 4173; hay que volver a correr `npm run build` después de cada cambio). Sigue siendo HTTP, así que no hay modo offline ni instalación.
 
 Uso recomendado: nivel 1 mientras se desarrolla cada fase, nivel 2a cuando cambie algo táctil (teclado, cámara, compartir) y nivel 3 para dar la fase por cerrada.
 

@@ -1,5 +1,5 @@
-import { db, repoAjustes } from '../db';
-import { mensajeDeError } from '../lib/compat';
+import { db, guardarEdicionConFoto, repoAjustes } from '../db';
+import { generarUuid, mensajeDeError } from '../lib/compat';
 import { cuentasActivas, etiquetaCuenta, ordenadas } from '../lib/cuentas';
 import {
   dateKey,
@@ -10,19 +10,23 @@ import {
   rangoMes,
   type Mes,
 } from '../lib/dates';
+import { aplicarCambioFoto, ErrorFoto, mensajeErrorAlmacenamiento, textoInfoFoto, type CambioFoto } from '../lib/fotos';
 import {
   agruparPorDia,
   eliminarGasto,
   filtrarGastos,
   validarEdicion,
+  type BorradoPendiente,
   type TotalMoneda,
 } from '../lib/historial';
 import { decimalsFor, formatMonto, montoParaCampo } from '../lib/money';
 import { cargarConfigMonedas } from '../lib/monedas';
 import { MAX_NOTA } from '../lib/nota';
-import type { Categoria, Cuenta, Gasto } from '../types';
+import type { Categoria, Cuenta, Foto, Gasto } from '../types';
 import { mostrarError } from './avisos';
+import { crearSelectorFoto, procesarArchivoElegido } from './foto-selector';
 import { cerrarTecladoConEnter } from './teclado';
+import { abrirVisor } from './visor';
 
 const FILAS_POR_LOTE = 300;
 const DESHACER_MS = 5000;
@@ -45,6 +49,8 @@ export interface VistaHistorial {
   el: HTMLElement;
   /** Vuelve a leer la base de datos; se llama cada vez que se abre la pestaña. */
   activar(): Promise<void>;
+  /** Se llama al salir de la pestaña: libera las miniaturas en memoria. */
+  desactivar(): void;
 }
 
 export function crearHistorial(irARegistrar: () => void): VistaHistorial {
@@ -58,6 +64,11 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
   let limite = FILAS_POR_LOTE;
   let lectura = 0;
   let toastTimer: number | undefined;
+  let borradoPendiente: BorradoPendiente | null = null;
+  // Miniaturas de la lista: se crean por pintado y se liberan (revokeObjectURL) al repintar o salir.
+  let urlsMiniaturas: string[] = [];
+  let pintado = 0;
+  let limpiarEdicion: (() => void) | null = null;
 
   const root = el('section', 'historial');
 
@@ -95,7 +106,22 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
   const panel = el('div', 'hoja-panel hoja-editar');
   hoja.append(panel);
 
-  root.append(filtros, lista, toast, hoja);
+  // Selector de archivos compartido por la hoja de edición (cámara y galería).
+  let alElegirFoto: ((archivo: File) => void) | null = null;
+  const selector = crearSelectorFoto((f) => alElegirFoto?.(f));
+
+  root.append(filtros, lista, toast, hoja, selector.el);
+
+  function liberarMiniaturas(): void {
+    for (const u of urlsMiniaturas) URL.revokeObjectURL(u);
+    urlsMiniaturas = [];
+  }
+
+  function cerrarEdicion(): void {
+    hoja.hidden = true;
+    limpiarEdicion?.();
+    limpiarEdicion = null;
+  }
 
   // ---------- Datos ----------
   const mesActual = (): Mes => mesElegido ?? mesDe(new Date());
@@ -150,6 +176,9 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
   }
 
   function pintarLista(): void {
+    liberarMiniaturas();
+    const mi = ++pintado;
+    const conFoto: { fotoId: string; boton: HTMLElement }[] = [];
     const hoy = dateKey(new Date());
     const grupos = agruparPorDia(filtrarGastos(gastosMes, { categoriaId: categoriaFiltro, cuentaId: cuentaFiltro }), hoy);
 
@@ -170,7 +199,7 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
       frag.append(cab);
       for (const gasto of grupo.gastos) {
         if (pintadas >= limite) break;
-        frag.append(crearFila(gasto));
+        frag.append(crearFila(gasto, conFoto));
         pintadas++;
       }
     }
@@ -185,6 +214,41 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
       frag.append(mas);
     }
     lista.replaceChildren(frag);
+    void cargarMiniaturas(mi, conFoto);
+  }
+
+  async function cargarMiniaturas(mi: number, lote: { fotoId: string; boton: HTMLElement }[]): Promise<void> {
+    if (lote.length === 0) return;
+    try {
+      const fotos = await db.fotos.bulkGet(lote.map((x) => x.fotoId));
+      if (mi !== pintado) return; // la lista se repintó o se salió de la pestaña
+      lote.forEach((x, i) => {
+        const f = fotos[i];
+        const blob = f?.miniatura ?? f?.blob;
+        if (!blob) return; // se queda el ícono 📷
+        const url = URL.createObjectURL(blob);
+        urlsMiniaturas.push(url);
+        const img = el('img');
+        img.src = url;
+        img.alt = '';
+        x.boton.replaceChildren(img);
+      });
+    } catch (e) {
+      mostrarError(`No se pudieron cargar las miniaturas: ${mensajeDeError(e)}`);
+    }
+  }
+
+  async function verFoto(fotoId: string): Promise<void> {
+    try {
+      const f = await db.fotos.get(fotoId);
+      if (!f) {
+        mostrarError('La foto de este gasto ya no está disponible.');
+        return;
+      }
+      abrirVisor(f.blob, f.ancho, f.alto, f.diag);
+    } catch (e) {
+      mostrarError(`No se pudo abrir la foto: ${mensajeDeError(e)}`);
+    }
   }
 
   function estadoVacio(): HTMLElement {
@@ -207,29 +271,38 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
     return v;
   }
 
-  function crearFila(g: Gasto): HTMLButtonElement {
+  function crearFila(g: Gasto, conFoto: { fotoId: string; boton: HTMLElement }[]): HTMLElement {
     const cat = nombreCategoria(g.categoriaId);
-    const fila = el('button', 'fila');
-    fila.type = 'button';
+    const fila = el('div', 'fila');
 
-    // Espacio reservado para la miniatura del recibo (se llena en la Fase 5).
-    if (g.fotoId) fila.append(el('span', 'fila-foto', '📷'));
+    // Miniatura del recibo: botón aparte que abre el visor (el resto de la fila abre la edición).
+    if (g.fotoId) {
+      const fotoId = g.fotoId;
+      const botonFoto = el('button', 'fila-foto', '📷');
+      botonFoto.type = 'button';
+      botonFoto.setAttribute('aria-label', 'Ver foto del recibo');
+      botonFoto.addEventListener('click', () => void verFoto(fotoId));
+      fila.append(botonFoto);
+      conFoto.push({ fotoId, boton: botonFoto });
+    }
 
-    fila.append(el('span', 'fila-emoji', cat?.emoji ?? '❔'));
+    const cuerpo = el('button', 'fila-cuerpo');
+    cuerpo.type = 'button';
+    cuerpo.addEventListener('click', () => abrirEdicion(g));
+    fila.append(cuerpo);
+    cuerpo.append(el('span', 'fila-emoji', cat?.emoji ?? '❔'));
     const centro = el('span', 'fila-centro');
     centro.append(el('span', 'fila-nombre', cat?.nombre ?? 'Sin categoría'));
     const cuenta = hayVariasActivas() ? cuentas.find((c) => c.id === g.cuentaId) : undefined;
-    const detalle = [isoAFechaHora(g.fecha).hora, cuenta ? etiquetaCuenta(cuenta) : '', g.nota.replace(/s+/g, ' ')]
+    const detalle = [isoAFechaHora(g.fecha).hora, cuenta ? etiquetaCuenta(cuenta) : '', g.nota.replace(/\s+/g, ' ')]
       .filter(Boolean)
       .join(' · ');
     centro.append(el('span', 'fila-detalle', detalle));
-    fila.append(centro);
+    cuerpo.append(centro);
 
     const monto = el('span', 'fila-monto', formatMonto(g.monto, g.moneda));
     monto.append(el('small', '', ` ${g.moneda}`));
-    fila.append(monto);
-
-    fila.addEventListener('click', () => abrirEdicion(g));
+    cuerpo.append(monto);
     return fila;
   }
 
@@ -239,6 +312,13 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
     let categoriaId = g.categoriaId;
     let cuentaId = g.cuentaId;
     let moneda = g.moneda;
+    limpiarEdicion?.();
+    // Foto: el cambio solo se aplica (y la foto vieja solo se elimina) al tocar Guardar cambios.
+    let cambioFoto: CambioFoto = { tipo: 'ninguno' };
+    let fotoActual: Foto | null = null;
+    let procesandoFoto = false;
+    let urlsEdicion: string[] = [];
+    let abierta = true;
 
     const titulo = el('h2', 'hoja-titulo', 'Editar gasto');
 
@@ -287,6 +367,103 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
     iNota.value = g.nota;
     iNota.setAttribute('aria-label', 'Nota');
     cerrarTecladoConEnter(iNota);
+
+    // ---- Foto del recibo ----
+    const seccionFoto = el('div', 'foto-seccion');
+    const liberarUrlsEdicion = (): void => {
+      for (const u of urlsEdicion) URL.revokeObjectURL(u);
+      urlsEdicion = [];
+    };
+    function fotoVigente(): { blob: Blob; miniatura?: Blob; diag?: string; ancho: number; alto: number } | null {
+      if (cambioFoto.tipo === 'reemplazar') return cambioFoto.foto;
+      if (cambioFoto.tipo === 'quitar') return null;
+      return fotoActual;
+    }
+    function pintarFotoEdicion(): void {
+      liberarUrlsEdicion();
+      const v = fotoVigente();
+      const fila = el('div', 'foto-fila');
+      const mini = el('div', 'foto-mini', '📷');
+      const mb = v?.miniatura ?? v?.blob;
+      if (mb) {
+        const url = URL.createObjectURL(mb);
+        urlsEdicion.push(url);
+        const img = el('img');
+        img.src = url;
+        img.alt = '';
+        mini.replaceChildren(img);
+      }
+      let estado = 'Sin foto';
+      if (procesandoFoto) estado = '⏳ Procesando foto…';
+      else if (cambioFoto.tipo === 'reemplazar') estado = 'Foto nueva (se aplica al guardar) · ' + textoInfoFoto(cambioFoto.foto.blob.size, cambioFoto.foto.ancho, cambioFoto.foto.alto);
+      else if (cambioFoto.tipo === 'quitar') estado = 'La foto se quitará al guardar';
+      else if (g.fotoId && !fotoActual) estado = 'Cargando foto…';
+      else if (fotoActual) estado = 'Foto del recibo · ' + textoInfoFoto(fotoActual.blob.size, fotoActual.ancho, fotoActual.alto);
+      fila.append(mini, el('span', 'foto-estado', estado));
+
+      const boton = (texto: string, alTocar: () => void): HTMLButtonElement => {
+        const b = el('button', 'cat-op', texto);
+        b.type = 'button';
+        b.disabled = procesandoFoto;
+        b.addEventListener('click', alTocar);
+        return b;
+      };
+      const botones = el('div', 'cat-selector');
+      if (v) {
+        botones.append(
+          boton('🔍 Ver', () => abrirVisor(v.blob, v.ancho, v.alto, v.diag)),
+          boton('📸 Reemplazar', () => selector.tomar()),
+          boton('🖼️ Galería', () => selector.galeria()),
+          boton('🗑️ Quitar', () => {
+            cambioFoto = g.fotoId ? { tipo: 'quitar' } : { tipo: 'ninguno' };
+            pintarFotoEdicion();
+          }),
+        );
+      } else {
+        botones.append(boton('📸 Tomar foto', () => selector.tomar()), boton('🖼️ Galería', () => selector.galeria()));
+        if (cambioFoto.tipo === 'quitar') {
+          botones.append(
+            boton('↩️ Conservar', () => {
+              cambioFoto = { tipo: 'ninguno' };
+              pintarFotoEdicion();
+            }),
+          );
+        }
+      }
+      seccionFoto.replaceChildren(fila, botones);
+    }
+    alElegirFoto = (archivo) => {
+      procesandoFoto = true;
+      pintarFotoEdicion();
+      void (async () => {
+        try {
+          const foto = await procesarArchivoElegido(archivo);
+          if (abierta) cambioFoto = { tipo: 'reemplazar', foto };
+        } catch (e) {
+          mostrarError(e instanceof ErrorFoto ? e.message : `No se pudo procesar la foto: ${mensajeDeError(e)}`);
+        } finally {
+          procesandoFoto = false;
+          if (abierta) pintarFotoEdicion();
+        }
+      })();
+    };
+    pintarFotoEdicion();
+    if (g.fotoId) {
+      const fotoId = g.fotoId;
+      void db.fotos
+        .get(fotoId)
+        .then((f) => {
+          if (!abierta) return;
+          fotoActual = f ?? null;
+          pintarFotoEdicion();
+        })
+        .catch((e) => mostrarError(`No se pudo cargar la foto: ${mensajeDeError(e)}`));
+    }
+    limpiarEdicion = () => {
+      abierta = false;
+      alElegirFoto = null;
+      liberarUrlsEdicion();
+    };
 
     const cats = el('div', 'cat-selector');
     const botonesCat = categorias.map((c) => {
@@ -339,48 +516,75 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
         error.hidden = false;
         return;
       }
+      if (procesandoFoto) {
+        error.textContent = 'Espera a que termine de procesarse la foto.';
+        error.hidden = false;
+        return;
+      }
+      const ed = aplicarCambioFoto(r.gasto, g, cambioFoto, new Date(), generarUuid);
       try {
-        if (r.cambio) await db.gastos.put(r.gasto);
-      } catch (e) {
-        mostrarError(`No se pudo guardar los cambios: ${mensajeDeError(e)}`);
+        if (r.cambio || ed.cambioFoto) await guardarEdicionConFoto(ed.gasto, ed.fotoNueva, ed.fotoABorrar);
+      } catch (err) {
+        mostrarError(`No se pudo guardar los cambios: ${mensajeErrorAlmacenamiento(err)}`);
         return; // la hoja sigue abierta con lo escrito
       }
-      hoja.hidden = true;
+      cerrarEdicion();
       await leer();
     });
 
     borrar.addEventListener('click', async () => {
-      let deshacer: () => Promise<void>;
+      await confirmarBorradoPendiente(); // un borrado anterior ya no se puede deshacer
+      let pendiente: BorradoPendiente;
       try {
-        deshacer = await eliminarGasto({ add: async (x) => void (await db.gastos.add(x)), delete: (id) => db.gastos.delete(id) }, g);
+        pendiente = await eliminarGasto(repoBorrado, g);
       } catch (e) {
         mostrarError(`No se pudo eliminar: ${mensajeDeError(e)}`);
         return;
       }
-      hoja.hidden = true;
-      mostrarToastEliminado(deshacer);
+      cerrarEdicion();
+      mostrarToastEliminado(pendiente);
       await leer();
     });
 
-    cancelar.addEventListener('click', () => (hoja.hidden = true));
+    cancelar.addEventListener('click', cerrarEdicion);
 
     // Guardar queda fijo al borde inferior de la hoja: visible aunque el teclado esté abierto.
     const pie = el('div', 'hoja-pie');
     pie.append(error, guardar);
 
-    panel.replaceChildren(titulo, campos, monedas, iNota, selectorCuenta, cats, pie, borrar, cancelar);
+    panel.replaceChildren(titulo, campos, monedas, iNota, seccionFoto, selectorCuenta, cats, pie, borrar, cancelar);
     hoja.hidden = false;
     panel.scrollTop = 0;
   }
 
-  function mostrarToastEliminado(deshacer: () => Promise<void>): void {
+  const repoBorrado = {
+    add: async (x: Gasto): Promise<void> => void (await db.gastos.add(x)),
+    delete: (id: string): Promise<void> => db.gastos.delete(id),
+    borrarFoto: (id: string): Promise<void> => db.fotos.delete(id),
+  };
+
+  /** Vence el plazo de Deshacer: ahora sí se elimina la foto del gasto borrado. */
+  async function confirmarBorradoPendiente(): Promise<void> {
+    const b = borradoPendiente;
+    borradoPendiente = null;
+    if (!b) return;
+    try {
+      await b.confirmar();
+    } catch (e) {
+      mostrarError(`No se pudo eliminar la foto del gasto borrado: ${mensajeDeError(e)}`);
+    }
+  }
+
+  function mostrarToastEliminado(pendiente: BorradoPendiente): void {
     window.clearTimeout(toastTimer);
+    borradoPendiente = pendiente;
     toast.hidden = false;
     toastDeshacer.onclick = async () => {
       window.clearTimeout(toastTimer);
       toast.hidden = true;
+      borradoPendiente = null;
       try {
-        await deshacer();
+        await pendiente.deshacer(); // el gasto vuelve con su foto, que seguía guardada
       } catch (e) {
         mostrarError(`No se pudo deshacer: ${mensajeDeError(e)}`);
       }
@@ -389,6 +593,7 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
     toastTimer = window.setTimeout(() => {
       toast.hidden = true;
       toastDeshacer.onclick = null;
+      void confirmarBorradoPendiente();
     }, DESHACER_MS);
   }
 
@@ -414,8 +619,15 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
     pintarLista();
   });
   hoja.addEventListener('click', (e) => {
-    if (e.target === hoja) hoja.hidden = true;
+    if (e.target === hoja) cerrarEdicion();
   });
 
-  return { el: root, activar: leer };
+  return {
+    el: root,
+    activar: leer,
+    desactivar() {
+      pintado++; // descarta cargas de miniaturas en curso
+      liberarMiniaturas();
+    },
+  };
 }

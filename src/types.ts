@@ -15,6 +15,10 @@ export interface Gasto {
 export interface Foto {
   id: string;
   blob: Blob;
+  /** Miniatura cuadrada de ~160 px para Historial. */
+  miniatura?: Blob;
+  /** Diagnóstico de la orientación EXIF, solo informativo. */
+  diag?: string;
   ancho: number;
   alto: number;
 }

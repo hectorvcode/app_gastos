@@ -1,5 +1,6 @@
 import Dexie, { type Table } from 'dexie';
 import { completarCuenta, CUENTA_INICIAL, CUENTA_PERSONAL_ID } from './lib/cuentas';
+import { limpiarFotosHuerfanas } from './lib/fotos';
 import type { Ajuste, Categoria, Cuenta, Foto, Gasto } from './types';
 
 export const CATEGORIAS_INICIALES: Categoria[] = [
@@ -22,6 +23,7 @@ export const CATEGORIAS_INICIALES: Categoria[] = [
 
 export const AJUSTES_INICIALES: Record<string, unknown> = {
   monedaPredeterminada: 'COP',
+  modoRecibo: true,
   monedasVisibles: ['COP', 'USD', 'EUR'],
   ultimaExportacion: null,
   cuentaPredeterminada: CUENTA_PERSONAL_ID,
@@ -81,6 +83,61 @@ export async function getAjuste<T>(clave: string, porDefecto: T): Promise<T> {
 export async function setAjuste(clave: string, valor: unknown): Promise<void> {
   await db.ajustes.put({ clave, valor });
 }
+
+// ---------- Gastos con foto (cada operación es una sola transacción) ----------
+
+/** Guarda el gasto y su foto: o se guardan las dos o ninguna. */
+export function guardarGastoConFoto(gasto: Gasto, foto: Foto | null): Promise<void> {
+  return db.transaction('rw', db.gastos, db.fotos, async () => {
+    if (foto) await db.fotos.put(foto);
+    await db.gastos.add(gasto);
+  });
+}
+
+/** Borra un gasto y su foto (para Deshacer en Registrar, donde ya no hay nada que recuperar). */
+export function borrarGastoConFoto(id: string): Promise<void> {
+  return db.transaction('rw', db.gastos, db.fotos, async () => {
+    const g = await db.gastos.get(id);
+    await db.gastos.delete(id);
+    if (g?.fotoId) await db.fotos.delete(g.fotoId);
+  });
+}
+
+/** Guarda el gasto editado; la foto nueva se agrega y la vieja se elimina recién aquí, en la misma transacción. */
+export function guardarEdicionConFoto(gasto: Gasto, fotoNueva: Foto | null, fotoABorrar: string | null): Promise<void> {
+  return db.transaction('rw', db.gastos, db.fotos, async () => {
+    if (fotoNueva) await db.fotos.put(fotoNueva);
+    await db.gastos.put(gasto);
+    if (fotoABorrar) await db.fotos.delete(fotoABorrar);
+  });
+}
+
+/** Borra las fotos sin gasto asociado (quedan así si la app se cierra durante un aviso de Deshacer). */
+export function limpiarHuerfanasEnDb(): Promise<number> {
+  return db.transaction('rw', db.gastos, db.fotos, () =>
+    limpiarFotosHuerfanas({
+      leer: async () => {
+        const enUso: string[] = [];
+        await db.gastos.each((g) => {
+          if (g.fotoId) enUso.push(g.fotoId);
+        });
+        return { fotos: (await db.fotos.toCollection().primaryKeys()) as string[], enUso };
+      },
+      borrar: (ids) => db.fotos.bulkDelete(ids),
+    }),
+  );
+}
+
+export async function borrarAjuste(clave: string): Promise<void> {
+  await db.ajustes.delete(clave);
+}
+
+/** Borrador del gasto en curso y su foto pendiente (viven en la tabla `ajustes`; sirve sin HTTPS). */
+export const repoBorrador = {
+  get: (clave: string): Promise<unknown> => getAjuste<unknown>(clave, undefined),
+  set: setAjuste,
+  delete: borrarAjuste,
+};
 
 /** Ajustes en la forma que usa `lib/monedas.ts`. */
 export const repoAjustes = {

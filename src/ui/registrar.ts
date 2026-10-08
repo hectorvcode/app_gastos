@@ -1,4 +1,5 @@
-import { db, repoAjustes } from '../db';
+import { borrarGastoConFoto, guardarGastoConFoto, repoAjustes, repoBorrador, db } from '../db';
+import { avisoRecuperacion, borrarBorrador, guardarBorrador, guardarFotoPendiente, leerBorrador } from '../lib/borrador';
 import { addDays, dayMonthLabel, shortLabel } from '../lib/dates';
 import { mensajeDeError } from '../lib/compat';
 import {
@@ -15,14 +16,18 @@ import {
   CATALOGO_MONEDAS,
   cargarConfigMonedas,
   guardarUltimaMoneda,
+  resolverMonedaAlActivar,
   resolverMonedaInicial,
   type ConfigMonedas,
 } from '../lib/monedas';
+import { ErrorFoto, mensajeErrorAlmacenamiento, textoInfoFoto, type FotoProcesada } from '../lib/fotos';
 import { MAX_NOTA } from '../lib/nota';
 import { aplicarTeclaFisica, SesionRegistro, type CambioMoneda } from '../lib/registro';
 import type { Categoria, Cuenta } from '../types';
-import { mostrarError } from './avisos';
+import { mostrarAviso, mostrarError } from './avisos';
+import { crearSelectorFoto, procesarArchivoElegido } from './foto-selector';
 import { cerrarTecladoConEnter } from './teclado';
+import { abrirVisor } from './visor';
 
 const DESHACER_MS = 5000;
 
@@ -67,8 +72,8 @@ export async function crearRegistrar(): Promise<VistaRegistrar> {
   let config: ConfigMonedas = await cargarConfigMonedas(repoAjustes);
   const moneda = resolverMonedaInicial(await repoAjustes.get('ultimaMoneda'), config);
   const sesion = new SesionRegistro(moneda, {
-    add: async (g) => void (await db.gastos.add(g)),
-    delete: (id) => db.gastos.delete(id),
+    add: guardarGastoConFoto,
+    delete: borrarGastoConFoto,
   });
   let cuentas: Cuenta[] = await db.cuentas.toArray();
   const estadoCuentas = await cargarEstadoCuentas(repoAjustes, cuentas);
@@ -88,7 +93,9 @@ export async function crearRegistrar(): Promise<VistaRegistrar> {
   chipCuenta.type = 'button';
   const chipNota = el('button', 'chip');
   chipNota.type = 'button';
-  chips.append(chipFecha, chipMoneda, chipCuenta, chipNota);
+  const chipFoto = el('button', 'chip');
+  chipFoto.type = 'button';
+  chips.append(chipFecha, chipMoneda, chipCuenta, chipNota, chipFoto);
 
   // --- Monto ---
   const monto = el('div', 'monto');
@@ -110,6 +117,7 @@ export async function crearRegistrar(): Promise<VistaRegistrar> {
     b.addEventListener('click', (e) => {
       sesion.pulsar(esExtra ? teclaExtra(sesion.moneda).key : t.key);
       pintarMonto();
+      programarBorrador();
       sinFoco(e);
     });
     teclado.append(b);
@@ -141,7 +149,77 @@ export async function crearRegistrar(): Promise<VistaRegistrar> {
   const hojaPanel = el('div', 'hoja-panel');
   hoja.append(hojaPanel);
 
-  root.append(chips, monto, teclado, grid, toast, avisoMoneda, hoja);
+  // --- Foto del recibo (pendiente para el siguiente gasto, como la nota) ---
+  const selector = crearSelectorFoto(recibirArchivo);
+  let procesando: Promise<boolean> | null = null;
+  let urlMiniatura: string | null = null;
+  let fotoPintada: unknown; // undefined = aún no pintado
+
+  // Borrador (resiste a que Android cierre Chrome al abrir la cámara): se guarda mientras hay
+  // una foto pendiente o se espera una, y se borra al guardar el gasto o al quitar la foto.
+  let esperandoFoto = false;
+  let hayBorrador = false;
+  let fotoPersistida: FotoProcesada | null = null;
+  let colaBorrador: Promise<void> = Promise.resolve();
+  let borradorTimer: number | undefined;
+
+  const borradorActivo = (): boolean => sesion.foto !== null || esperandoFoto || procesando !== null;
+
+  /** Escribe (o borra) el borrador en orden, sin que una escritura vieja pise a una nueva. */
+  function sincronizarBorrador(): Promise<void> {
+    window.clearTimeout(borradorTimer);
+    colaBorrador = colaBorrador.then(async () => {
+      try {
+        if (!borradorActivo()) {
+          if (hayBorrador || fotoPersistida) await borrarBorrador(repoBorrador);
+          hayBorrador = false;
+          fotoPersistida = null;
+          return;
+        }
+        if (sesion.foto !== fotoPersistida) {
+          await guardarFotoPendiente(repoBorrador, sesion.foto);
+          fotoPersistida = sesion.foto;
+        }
+        await guardarBorrador(repoBorrador, sesion.instantanea(), esperandoFoto || procesando !== null, Date.now());
+        hayBorrador = true;
+      } catch (e) {
+        mostrarError(`No se pudo guardar el borrador del gasto: ${mensajeErrorAlmacenamiento(e)}`);
+      }
+    });
+    return colaBorrador;
+  }
+
+  /** Para cambios frecuentes (teclas, nota): espera un momento y solo escribe si hay un borrador activo. */
+  function programarBorrador(): void {
+    if (!borradorActivo()) return;
+    window.clearTimeout(borradorTimer);
+    borradorTimer = window.setTimeout(() => void sincronizarBorrador(), 400);
+  }
+
+  /** Abre la cámara o la galería, guardando antes el borrador. */
+  async function abrirSelector(abrir: () => void): Promise<void> {
+    esperandoFoto = true;
+    try {
+      await sincronizarBorrador();
+    } finally {
+      abrir(); // si el borrador falla ya se avisó; el selector se abre igual
+    }
+  }
+
+  // Si el selector se cierra sin elegir nada, ya no se espera ninguna foto.
+  const alVolver = (): void => {
+    if (document.hidden || !esperandoFoto) return;
+    window.setTimeout(() => {
+      if (esperandoFoto && procesando === null) {
+        esperandoFoto = false;
+        void sincronizarBorrador();
+      }
+    }, 2500);
+  };
+  document.addEventListener('visibilitychange', alVolver);
+  window.addEventListener('focus', alVolver);
+
+  root.append(chips, monto, teclado, grid, toast, avisoMoneda, hoja, selector.el);
 
   // ---------- Pintado ----------
   function pintarFecha(): void {
@@ -174,6 +252,36 @@ export async function crearRegistrar(): Promise<VistaRegistrar> {
     chipNota.textContent = hay ? '📝 Nota ●' : '📝 Nota';
     chipNota.classList.toggle('chip-alerta', hay);
     chipNota.setAttribute('aria-label', hay ? 'Nota pendiente para el próximo gasto' : 'Agregar nota');
+  }
+
+  function pintarFoto(): void {
+    if (procesando) {
+      chipFoto.replaceChildren(document.createTextNode('⏳ Procesando foto…'));
+      chipFoto.classList.add('chip-alerta');
+      chipFoto.disabled = true;
+      fotoPintada = 'procesando';
+      return;
+    }
+    chipFoto.disabled = false;
+    const f = sesion.foto;
+    if (f === fotoPintada) return; // sin cambios: no se vuelve a crear la miniatura
+    fotoPintada = f;
+    if (urlMiniatura) {
+      URL.revokeObjectURL(urlMiniatura);
+      urlMiniatura = null;
+    }
+    chipFoto.classList.toggle('chip-alerta', f !== null);
+    if (!f) {
+      chipFoto.replaceChildren(document.createTextNode('📷 Foto'));
+      chipFoto.setAttribute('aria-label', 'Agregar foto del recibo');
+      return;
+    }
+    urlMiniatura = URL.createObjectURL(f.miniatura);
+    const img = el('img', 'chip-miniatura');
+    img.src = urlMiniatura;
+    img.alt = '';
+    chipFoto.replaceChildren(img, document.createTextNode(' Foto ●'));
+    chipFoto.setAttribute('aria-label', 'Foto pendiente para el próximo gasto');
   }
 
   function pintarMonto(): void {
@@ -215,12 +323,18 @@ export async function crearRegistrar(): Promise<VistaRegistrar> {
       vibrarMonto();
       return;
     }
+    if (procesando && !(await procesando)) {
+      mostrarError('El gasto no se guardó porque la foto no se pudo procesar. Toca la categoría otra vez para guardarlo sin foto.');
+      return;
+    }
     try {
       const promesa = sesion.guardar(cat.id);
       pintarMonto(); // el monto ya se limpió; la base de datos termina en segundo plano
       pintarNota();
+      pintarFoto();
       const r = await promesa;
       if (!r.ok) return;
+      void sincronizarBorrador(); // ya no hay foto pendiente: se borra el borrador
       pintarFecha();
       const cuenta = cuentas.find((x) => x.id === r.gasto.cuentaId);
       mostrarToast(
@@ -230,9 +344,10 @@ export async function crearRegistrar(): Promise<VistaRegistrar> {
         ),
       );
     } catch (e) {
-      pintarMonto(); // la sesión conserva el monto y la nota escritos
+      pintarMonto(); // la sesión conserva el monto, la nota y la foto escritos
       pintarNota();
-      mostrarError(`No se pudo guardar: ${mensajeDeError(e)}`);
+      pintarFoto();
+      mostrarError(`No se pudo guardar: ${mensajeErrorAlmacenamiento(e)}`);
     }
   }
 
@@ -259,7 +374,9 @@ export async function crearRegistrar(): Promise<VistaRegistrar> {
     pintarMoneda();
     pintarCuenta();
     pintarNota();
+    pintarFoto();
     pintarMonto();
+    programarBorrador(); // fecha, moneda, cuenta o nota pudieron cambiar
   }
 
   function abrirHoja(): void {
@@ -433,6 +550,7 @@ export async function crearRegistrar(): Promise<VistaRegistrar> {
     campo.addEventListener('input', () => {
       sesion.ponerNota(campo.value);
       pintarContador();
+      programarBorrador();
     });
     const listo = el('button', 'btn-primario', 'Listo');
     listo.type = 'button';
@@ -455,6 +573,79 @@ export async function crearRegistrar(): Promise<VistaRegistrar> {
     abrirHojaNota();
   });
 
+  // ---------- Foto ----------
+  function recibirArchivo(archivo: File): void {
+    esperandoFoto = false; // la foto llegó; mientras se procesa, el borrador sigue marcado como "esperando"
+    const tarea = (async (): Promise<boolean> => {
+      try {
+        sesion.ponerFoto(await procesarArchivoElegido(archivo));
+        return true;
+      } catch (e) {
+        mostrarError(e instanceof ErrorFoto ? e.message : `No se pudo procesar la foto: ${mensajeDeError(e)}`);
+        return false; // si había otra foto pendiente, se conserva
+      }
+    })();
+    procesando = tarea;
+    pintarFoto();
+    void sincronizarBorrador();
+    void tarea.then(() => {
+      if (procesando === tarea) procesando = null;
+      pintarFoto();
+      void sincronizarBorrador(); // foto lista: se guarda también como pendiente en IndexedDB
+    });
+  }
+
+  function abrirHojaFoto(): void {
+    const f = sesion.foto;
+    const opcion = (texto: string, alTocar: () => void, clase = 'hoja-op'): HTMLButtonElement => {
+      const b = el('button', clase, texto);
+      b.type = 'button';
+      b.addEventListener('click', alTocar);
+      return b;
+    };
+    const cancelar = opcion(f ? 'Cerrar' : 'Cancelar', cerrarHoja, 'hoja-op hoja-cerrar');
+    const partes: HTMLElement[] = [el('h2', 'hoja-titulo', f ? 'Foto del próximo gasto' : 'Foto del recibo')];
+    if (f) {
+      partes.push(
+        el('p', 'hoja-ayuda', textoInfoFoto(f.blob.size, f.ancho, f.alto)),
+        opcion('🔍 Ver foto', () => abrirVisor(f.blob, f.ancho, f.alto, f.diag)),
+        opcion('📸 Tomar otra foto', () => {
+          void abrirSelector(selector.tomar);
+          cerrarHoja();
+        }),
+        opcion('🖼️ Elegir otra de la galería', () => {
+          void abrirSelector(selector.galeria);
+          cerrarHoja();
+        }),
+        opcion('🗑️ Quitar foto', () => {
+          sesion.ponerFoto(null);
+          cerrarHoja();
+          void sincronizarBorrador(); // sin foto pendiente, el borrador se descarta
+        }),
+      );
+    } else {
+      partes.push(
+        opcion('📸 Tomar foto', () => {
+          void abrirSelector(selector.tomar);
+          cerrarHoja();
+        }),
+        opcion('🖼️ Elegir de la galería', () => {
+          void abrirSelector(selector.galeria);
+          cerrarHoja();
+        }),
+      );
+    }
+    partes.push(cancelar);
+    hojaPanel.replaceChildren(...partes);
+    hoja.hidden = false;
+    hojaPanel.scrollTop = 0;
+  }
+
+  chipFoto.addEventListener('click', (e) => {
+    sinFoco(e);
+    abrirHojaFoto();
+  });
+
   // ---------- Teclado físico ----------
   document.addEventListener('keydown', (e) => {
     if (root.hidden || !hoja.hidden) return;
@@ -463,6 +654,7 @@ export async function crearRegistrar(): Promise<VistaRegistrar> {
     if (aplicarTeclaFisica(sesion, e.key)) {
       e.preventDefault(); // también evita que Enter active un botón con foco
       pintarMonto();
+      programarBorrador();
     }
   });
 
@@ -473,6 +665,7 @@ export async function crearRegistrar(): Promise<VistaRegistrar> {
   });
 
   async function activar(): Promise<void> {
+    const predeterminadaPrevia = config.predeterminada;
     config = await cargarConfigMonedas(repoAjustes);
     cuentas = await db.cuentas.toArray();
     const estado = await cargarEstadoCuentas(repoAjustes, cuentas);
@@ -487,9 +680,28 @@ export async function crearRegistrar(): Promise<VistaRegistrar> {
       void persistirCuenta();
     }
     pintarCuenta();
-    // Si Ajustes ocultó la moneda en uso, se pasa a la predeterminada (con aviso si pierde decimales).
-    if (!config.visibles.includes(sesion.moneda)) aplicarMoneda(config.predeterminada);
+    // Si Ajustes cambió la moneda predeterminada, Registrar pasa a ella (igual que con la cuenta); y lo mismo
+    // si ocultó la moneda en uso. Con aviso si la nueva moneda pierde decimales.
+    const monedaVigente = resolverMonedaAlActivar(sesion.moneda, config, predeterminadaPrevia);
+    if (monedaVigente !== sesion.moneda) aplicarMoneda(monedaVigente);
     else pintarMoneda();
+  }
+
+  // Recupera el gasto en curso si la app se cerró o recargó mientras se tomaba la foto (menos de 15 min).
+  try {
+    const rec = await leerBorrador(repoBorrador, Date.now());
+    if (rec) {
+      sesion.restaurar(rec.borrador, config.visibles, cuentasActivas(cuentas).map((c) => c.id));
+      if (rec.foto) {
+        sesion.ponerFoto(rec.foto);
+        fotoPersistida = rec.foto;
+      }
+      hayBorrador = true;
+      mostrarAviso(avisoRecuperacion(rec));
+      void sincronizarBorrador(); // sin foto el borrador se descarta; con foto sigue vigente (ya sin la marca de espera)
+    }
+  } catch (e) {
+    mostrarError(`No se pudo recuperar el gasto en curso: ${mensajeErrorAlmacenamiento(e)}`);
   }
 
   pintarMonto();
@@ -497,6 +709,7 @@ export async function crearRegistrar(): Promise<VistaRegistrar> {
   pintarMoneda();
   pintarCuenta();
   pintarNota();
+  pintarFoto();
   await pintarCategorias();
   return { el: root, activar };
 }
