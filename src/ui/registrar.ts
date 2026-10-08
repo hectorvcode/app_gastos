@@ -1,6 +1,15 @@
 import { db, repoAjustes } from '../db';
 import { addDays, dayMonthLabel, shortLabel } from '../lib/dates';
 import { mensajeDeError } from '../lib/compat';
+import {
+  cargarEstadoCuentas,
+  cuentasActivas,
+  etiquetaCuenta,
+  guardarUltimaCuenta,
+  mostrarChipCuenta,
+  resolverCuentaActual,
+  textoGuardado,
+} from '../lib/cuentas';
 import { formatEntryPartes, entryToNumber, simboloMoneda, formatMonto, teclaExtra, type Key } from '../lib/money';
 import {
   CATALOGO_MONEDAS,
@@ -11,7 +20,7 @@ import {
 } from '../lib/monedas';
 import { MAX_NOTA } from '../lib/nota';
 import { aplicarTeclaFisica, SesionRegistro, type CambioMoneda } from '../lib/registro';
-import type { Categoria } from '../types';
+import type { Categoria, Cuenta } from '../types';
 import { mostrarError } from './avisos';
 import { cerrarTecladoConEnter } from './teclado';
 
@@ -61,6 +70,10 @@ export async function crearRegistrar(): Promise<VistaRegistrar> {
     add: async (g) => void (await db.gastos.add(g)),
     delete: (id) => db.gastos.delete(id),
   });
+  let cuentas: Cuenta[] = await db.cuentas.toArray();
+  const estadoCuentas = await cargarEstadoCuentas(repoAjustes, cuentas);
+  let cuentaPredeterminada = estadoCuentas.predeterminada;
+  sesion.cuentaId = estadoCuentas.actual;
   let toastTimer: number | undefined;
 
   const root = el('section', 'registrar');
@@ -71,9 +84,11 @@ export async function crearRegistrar(): Promise<VistaRegistrar> {
   chipFecha.type = 'button';
   const chipMoneda = el('button', 'chip');
   chipMoneda.type = 'button';
+  const chipCuenta = el('button', 'chip');
+  chipCuenta.type = 'button';
   const chipNota = el('button', 'chip');
   chipNota.type = 'button';
-  chips.append(chipFecha, chipMoneda, chipNota);
+  chips.append(chipFecha, chipMoneda, chipCuenta, chipNota);
 
   // --- Monto ---
   const monto = el('div', 'monto');
@@ -147,6 +162,13 @@ export async function crearRegistrar(): Promise<VistaRegistrar> {
     }
   }
 
+  function pintarCuenta(): void {
+    chipCuenta.hidden = !mostrarChipCuenta(cuentas);
+    const c = cuentas.find((x) => x.id === sesion.cuentaId);
+    chipCuenta.textContent = c ? etiquetaCuenta(c) : '📒 Cuenta';
+    chipCuenta.classList.toggle('chip-alerta', sesion.cuentaId !== cuentaPredeterminada);
+  }
+
   function pintarNota(): void {
     const hay = sesion.nota !== '';
     chipNota.textContent = hay ? '📝 Nota ●' : '📝 Nota';
@@ -200,7 +222,13 @@ export async function crearRegistrar(): Promise<VistaRegistrar> {
       const r = await promesa;
       if (!r.ok) return;
       pintarFecha();
-      mostrarToast(r.esHoy ? 'Guardado' : `Guardado el ${dayMonthLabel(r.fechaKey)}`);
+      const cuenta = cuentas.find((x) => x.id === r.gasto.cuentaId);
+      mostrarToast(
+        textoGuardado(
+          r.esHoy ? null : dayMonthLabel(r.fechaKey),
+          cuenta && cuenta.id !== cuentaPredeterminada ? cuenta.nombre : null,
+        ),
+      );
     } catch (e) {
       pintarMonto(); // la sesión conserva el monto y la nota escritos
       pintarNota();
@@ -229,6 +257,7 @@ export async function crearRegistrar(): Promise<VistaRegistrar> {
     hoja.hidden = true;
     pintarFecha();
     pintarMoneda();
+    pintarCuenta();
     pintarNota();
     pintarMonto();
   }
@@ -350,6 +379,40 @@ export async function crearRegistrar(): Promise<VistaRegistrar> {
     abrirHojaMoneda();
   });
 
+  // ---------- Selector de cuenta ----------
+  async function persistirCuenta(): Promise<void> {
+    try {
+      await guardarUltimaCuenta(repoAjustes, sesion.cuentaId);
+    } catch (e) {
+      mostrarError(`No se pudo recordar la cuenta elegida: ${mensajeDeError(e)}`);
+    }
+  }
+
+  function abrirHojaCuenta(): void {
+    const botones = cuentasActivas(cuentas).map((c) => {
+      const pred = c.id === cuentaPredeterminada ? ' · predeterminada' : '';
+      const b = el('button', 'hoja-op', `${etiquetaCuenta(c)}${pred}`);
+      b.type = 'button';
+      b.classList.toggle('activa', c.id === sesion.cuentaId);
+      b.addEventListener('click', () => {
+        sesion.cuentaId = c.id;
+        void persistirCuenta();
+        cerrarHoja();
+      });
+      return b;
+    });
+    const cerrar = el('button', 'hoja-op hoja-cerrar', 'Cancelar');
+    cerrar.type = 'button';
+    cerrar.addEventListener('click', cerrarHoja);
+    hojaPanel.replaceChildren(...botones, cerrar);
+    hoja.hidden = false;
+  }
+
+  chipCuenta.addEventListener('click', (e) => {
+    sinFoco(e);
+    abrirHojaCuenta();
+  });
+
   // ---------- Nota ----------
   function abrirHojaNota(): void {
     const titulo = el('h2', 'hoja-titulo', 'Nota del próximo gasto');
@@ -411,6 +474,16 @@ export async function crearRegistrar(): Promise<VistaRegistrar> {
 
   async function activar(): Promise<void> {
     config = await cargarConfigMonedas(repoAjustes);
+    cuentas = await db.cuentas.toArray();
+    const estado = await cargarEstadoCuentas(repoAjustes, cuentas);
+    cuentaPredeterminada = estado.predeterminada;
+    // Si Ajustes archivó o borró la cuenta en uso, Registrar pasa a la predeterminada.
+    const vigente = resolverCuentaActual(sesion.cuentaId, cuentas, cuentaPredeterminada);
+    if (vigente !== sesion.cuentaId) {
+      sesion.cuentaId = vigente;
+      void persistirCuenta();
+    }
+    pintarCuenta();
     // Si Ajustes ocultó la moneda en uso, se pasa a la predeterminada (con aviso si pierde decimales).
     if (!config.visibles.includes(sesion.moneda)) aplicarMoneda(config.predeterminada);
     else pintarMoneda();
@@ -419,6 +492,7 @@ export async function crearRegistrar(): Promise<VistaRegistrar> {
   pintarMonto();
   pintarFecha();
   pintarMoneda();
+  pintarCuenta();
   pintarNota();
   await pintarCategorias();
   return { el: root, activar };

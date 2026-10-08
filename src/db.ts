@@ -1,5 +1,6 @@
 import Dexie, { type Table } from 'dexie';
-import type { Ajuste, Categoria, Foto, Gasto } from './types';
+import { completarCuenta, CUENTA_INICIAL, CUENTA_PERSONAL_ID } from './lib/cuentas';
+import type { Ajuste, Categoria, Cuenta, Foto, Gasto } from './types';
 
 export const CATEGORIAS_INICIALES: Categoria[] = [
   ['comida', 'Comida', '🍽️'],
@@ -23,13 +24,15 @@ export const AJUSTES_INICIALES: Record<string, unknown> = {
   monedaPredeterminada: 'COP',
   monedasVisibles: ['COP', 'USD', 'EUR'],
   ultimaExportacion: null,
-  versionEsquema: 1,
+  cuentaPredeterminada: CUENTA_PERSONAL_ID,
+  versionEsquema: 2,
 };
 
 class GastosDB extends Dexie {
   gastos!: Table<Gasto, string>;
   fotos!: Table<Foto, string>;
   categorias!: Table<Categoria, string>;
+  cuentas!: Table<Cuenta, string>;
   ajustes!: Table<Ajuste, string>;
 
   constructor() {
@@ -40,7 +43,26 @@ class GastosDB extends Dexie {
       categorias: 'id, orden',
       ajustes: 'clave',
     });
+    // Fase 4b: cuentas. Dexie ejecuta la migración en una sola transacción: si algo falla,
+    // la base queda en la versión 1 sin cambios.
+    this.version(2)
+      .stores({
+        gastos: 'id, fecha, categoriaId, cuentaId, editadoEn',
+        cuentas: 'id, orden',
+      })
+      .upgrade(async (tx) => {
+        await tx.table('cuentas').put(CUENTA_INICIAL);
+        await tx.table('ajustes').put({ clave: 'cuentaPredeterminada', valor: CUENTA_PERSONAL_ID });
+        await tx.table('ajustes').put({ clave: 'versionEsquema', valor: 2 });
+        await tx
+          .table('gastos')
+          .toCollection()
+          .modify((g: { cuentaId?: string }) => {
+            g.cuentaId = completarCuenta(g).cuentaId;
+          });
+      });
     this.on('populate', (tx) => {
+      void tx.table('cuentas').bulkAdd([CUENTA_INICIAL]);
       void tx.table('categorias').bulkAdd(CATEGORIAS_INICIALES);
       void tx
         .table('ajustes')

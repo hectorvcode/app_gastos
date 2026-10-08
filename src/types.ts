@@ -4,6 +4,7 @@ export interface Gasto {
   monto: number;
   moneda: string;
   categoriaId: string;
+  cuentaId: string;
   nota: string;
   fotoId: string | null;
   creadoEn: string;
@@ -24,6 +25,14 @@ export interface Categoria {
   emoji: string;
   orden: number;
   activa: boolean;
+}
+
+export interface Cuenta {
+  id: string;
+  nombre: string;
+  emoji: string;
+  orden: number;
+  archivada: boolean;
 }
 
 export interface Ajuste {

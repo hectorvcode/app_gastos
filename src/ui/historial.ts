@@ -1,5 +1,6 @@
 import { db, repoAjustes } from '../db';
 import { mensajeDeError } from '../lib/compat';
+import { cuentasActivas, etiquetaCuenta, ordenadas } from '../lib/cuentas';
 import {
   dateKey,
   desplazarMes,
@@ -12,14 +13,14 @@ import {
 import {
   agruparPorDia,
   eliminarGasto,
-  filtrarPorCategoria,
+  filtrarGastos,
   validarEdicion,
   type TotalMoneda,
 } from '../lib/historial';
 import { decimalsFor, formatMonto, montoParaCampo } from '../lib/money';
 import { cargarConfigMonedas } from '../lib/monedas';
 import { MAX_NOTA } from '../lib/nota';
-import type { Categoria, Gasto } from '../types';
+import type { Categoria, Cuenta, Gasto } from '../types';
 import { mostrarError } from './avisos';
 import { cerrarTecladoConEnter } from './teclado';
 
@@ -49,7 +50,9 @@ export interface VistaHistorial {
 export function crearHistorial(irARegistrar: () => void): VistaHistorial {
   let mesElegido: Mes | null = null; // null = mes actual
   let categoriaFiltro: string | null = null;
+  let cuentaFiltro: string | null = null;
   let categorias: Categoria[] = [];
+  let cuentas: Cuenta[] = [];
   let monedasVisibles: string[] = [];
   let gastosMes: Gasto[] = [];
   let limite = FILAS_POR_LOTE;
@@ -72,7 +75,9 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
 
   const selCategoria = el('select', 'filtro-categoria');
   selCategoria.setAttribute('aria-label', 'Filtrar por categoría');
-  filtros.append(navMes, selCategoria);
+  const selCuenta = el('select', 'filtro-categoria');
+  selCuenta.setAttribute('aria-label', 'Filtrar por cuenta');
+  filtros.append(navMes, selCuenta, selCategoria);
 
   const lista = el('div', 'lista');
 
@@ -94,19 +99,24 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
 
   // ---------- Datos ----------
   const mesActual = (): Mes => mesElegido ?? mesDe(new Date());
+  const hayVariasActivas = (): boolean => cuentasActivas(cuentas).length > 1;
   const nombreCategoria = (id: string): Categoria | undefined => categorias.find((c) => c.id === id);
 
   async function leer(): Promise<void> {
     const mi = ++lectura;
     try {
       const { desde, hasta } = rangoMes(mesActual());
-      const [cats, config, gastos] = await Promise.all([
+      const [cats, cts, config, gastos] = await Promise.all([
         db.categorias.orderBy('orden').toArray(),
+        db.cuentas.toArray(),
         cargarConfigMonedas(repoAjustes),
         db.gastos.where('fecha').between(desde, hasta, true, false).toArray(),
       ]);
       if (mi !== lectura) return; // llegó una lectura más nueva
       categorias = cats;
+      cuentas = cts;
+      // Si la cuenta filtrada ya no existe (se borró), se vuelve a "Todas".
+      if (cuentaFiltro !== null && !cuentas.some((c) => c.id === cuentaFiltro)) cuentaFiltro = null;
       monedasVisibles = config.visibles;
       gastosMes = gastos;
       limite = FILAS_POR_LOTE;
@@ -129,11 +139,19 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
       ...categorias.map((c) => new Option(`${c.emoji} ${c.nombre}`, c.id)),
     );
     selCategoria.value = categoriaFiltro ?? '';
+
+    // Con una sola cuenta no hay nada que filtrar. Las archivadas siguen apareciendo aquí.
+    selCuenta.hidden = cuentas.length <= 1;
+    selCuenta.replaceChildren(
+      new Option('Todas las cuentas', ''),
+      ...ordenadas(cuentas).map((c) => new Option(`${etiquetaCuenta(c)}${c.archivada ? ' (archivada)' : ''}`, c.id)),
+    );
+    selCuenta.value = cuentaFiltro ?? '';
   }
 
   function pintarLista(): void {
     const hoy = dateKey(new Date());
-    const grupos = agruparPorDia(filtrarPorCategoria(gastosMes, categoriaFiltro), hoy);
+    const grupos = agruparPorDia(filtrarGastos(gastosMes, { categoriaId: categoriaFiltro, cuentaId: cuentaFiltro }), hoy);
 
     if (grupos.length === 0) {
       lista.replaceChildren(estadoVacio());
@@ -171,14 +189,14 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
 
   function estadoVacio(): HTMLElement {
     const v = el('div', 'vacio-historial');
-    const hayFiltro = categoriaFiltro !== null;
+    const hayFiltro = categoriaFiltro !== null || cuentaFiltro !== null;
     v.append(
       el('div', 'vacio-emoji', '🧾'),
       el(
         'p',
         '',
         hayFiltro
-          ? `No hay gastos de esa categoría en ${etiquetaMes(mesActual())}.`
+          ? `No hay gastos con esos filtros en ${etiquetaMes(mesActual())}.`
           : `No hay gastos en ${etiquetaMes(mesActual())}.`,
       ),
     );
@@ -200,7 +218,10 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
     fila.append(el('span', 'fila-emoji', cat?.emoji ?? '❔'));
     const centro = el('span', 'fila-centro');
     centro.append(el('span', 'fila-nombre', cat?.nombre ?? 'Sin categoría'));
-    const detalle = [isoAFechaHora(g.fecha).hora, g.nota.replace(/\s+/g, ' ')].filter(Boolean).join(' · ');
+    const cuenta = hayVariasActivas() ? cuentas.find((c) => c.id === g.cuentaId) : undefined;
+    const detalle = [isoAFechaHora(g.fecha).hora, cuenta ? etiquetaCuenta(cuenta) : '', g.nota.replace(/s+/g, ' ')]
+      .filter(Boolean)
+      .join(' · ');
     centro.append(el('span', 'fila-detalle', detalle));
     fila.append(centro);
 
@@ -216,6 +237,7 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
   function abrirEdicion(g: Gasto): void {
     const { fecha, hora } = isoAFechaHora(g.fecha);
     let categoriaId = g.categoriaId;
+    let cuentaId = g.cuentaId;
     let moneda = g.moneda;
 
     const titulo = el('h2', 'hoja-titulo', 'Editar gasto');
@@ -279,6 +301,22 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
     });
     cats.append(...botonesCat);
 
+    // Activas; la cuenta del gasto siempre aparece aunque esté archivada. Con una sola cuenta no se muestra.
+    const opciones = ordenadas(cuentas).filter((c) => !c.archivada || c.id === g.cuentaId);
+    const selectorCuenta = el('div', 'cat-selector');
+    const botonesCuenta = opciones.map((c) => {
+      const b = el('button', 'cat-op', etiquetaCuenta(c));
+      b.type = 'button';
+      b.setAttribute('aria-pressed', String(c.id === cuentaId));
+      b.addEventListener('click', () => {
+        cuentaId = c.id;
+        for (const o of botonesCuenta) o.setAttribute('aria-pressed', String(o === b));
+      });
+      return b;
+    });
+    selectorCuenta.append(...botonesCuenta);
+    selectorCuenta.hidden = cuentas.length <= 1;
+
     const error = el('p', 'hoja-error');
     error.setAttribute('role', 'alert');
     error.hidden = true;
@@ -293,7 +331,7 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
     guardar.addEventListener('click', async () => {
       const r = validarEdicion(
         g,
-        { fecha: iFecha.value, hora: iHora.value, monto: iMonto.value, categoriaId, moneda, nota: iNota.value },
+        { fecha: iFecha.value, hora: iHora.value, monto: iMonto.value, categoriaId, cuentaId, moneda, nota: iNota.value },
         new Date(),
       );
       if (!r.ok) {
@@ -330,7 +368,7 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
     const pie = el('div', 'hoja-pie');
     pie.append(error, guardar);
 
-    panel.replaceChildren(titulo, campos, monedas, iNota, cats, pie, borrar, cancelar);
+    panel.replaceChildren(titulo, campos, monedas, iNota, selectorCuenta, cats, pie, borrar, cancelar);
     hoja.hidden = false;
     panel.scrollTop = 0;
   }
@@ -367,6 +405,11 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
   });
   selCategoria.addEventListener('change', () => {
     categoriaFiltro = selCategoria.value || null;
+    limite = FILAS_POR_LOTE;
+    pintarLista();
+  });
+  selCuenta.addEventListener('change', () => {
+    cuentaFiltro = selCuenta.value || null;
     limite = FILAS_POR_LOTE;
     pintarLista();
   });

@@ -41,7 +41,7 @@ Para evitar que Chrome borre los datos si el teléfono se queda sin espacio, la 
 
 ## Modelo de datos
 
-Cuatro tablas en IndexedDB; las fotos van aparte para que listar gastos sea rápido.
+Cinco tablas en IndexedDB; las fotos van aparte para que listar gastos sea rápido.
 
 **gastos**
 
@@ -52,6 +52,7 @@ Cuatro tablas en IndexedDB; las fotos van aparte para que listar gastos sea ráp
 | monto | number | Siempre positivo; hasta 2 decimales |
 | moneda | string | Código ISO 4217: COP, USD, EUR… |
 | categoriaId | string | Referencia a categorias |
+| cuentaId | string | Referencia a cuentas; los gastos anteriores a la Fase 4b pasan a la cuenta "Personal" |
 | nota | string | Opcional, máximo 200 caracteres |
 | fotoId | string o null | Referencia a fotos |
 | creadoEn / editadoEn | string ISO | Para auditoría y exportación incremental |
@@ -61,7 +62,9 @@ Cuatro tablas en IndexedDB; las fotos van aparte para que listar gastos sea ráp
 
 **categorias**: id, nombre, emoji, orden, activa. Precargadas: Comida, Mercado, Transporte, Hogar, Salud, Ocio, Compras, Servicios, Otros. El usuario puede renombrar, reordenar y ocultar.
 
-**ajustes** (clave-valor): monedaPredeterminada (COP), monedasVisibles (COP, USD, EUR), ultimaExportacion, versionEsquema.
+**cuentas**: id, nombre, emoji, orden, archivada. Una cuenta es un libro separado de gastos (Personal, Hogar, Negocio…): solo una etiqueta para registrar y consultar por separado, sin saldo, ingresos, transferencias ni moneda propia. Al iniciar por primera vez se crea "Personal". Una cuenta con gastos no se borra, solo se archiva; siempre queda al menos una cuenta activa y la predeterminada no se puede archivar.
+
+**ajustes** (clave-valor): monedaPredeterminada (COP), monedasVisibles (COP, USD, EUR), cuentaPredeterminada (id de cuenta), ultimaCuenta (última cuenta usada en Registrar), ultimaExportacion, versionEsquema (2 desde la Fase 4b).
 
 No hay conversión de divisas en la app: cada gasto guarda su monto en la moneda original. La conversión se hace en Google Sheets con `GOOGLEFINANCE("CURRENCY:USDCOP")`.
 
@@ -73,7 +76,7 @@ Flujo de registro:
 
 1. Abrir la app desde el ícono: el monto aparece en 0 y el teclado propio está visible.
 2. Escribir el monto. Para COP no se muestran decimales; se ve con separador de miles (45.000).
-3. Opcional: tocar el chip de fecha (dice "Hoy") para registrar otro día, el chip de moneda para cambiarla, el ícono de cámara para la foto o "Nota" para escribir.
+3. Opcional: tocar el chip de fecha (dice "Hoy") para registrar otro día, el chip de moneda para cambiarla, el chip de cuenta (solo si hay más de una cuenta activa) para registrar en otro libro, el ícono de cámara para la foto o "Nota" para escribir.
 4. Tocar una categoría de la cuadrícula: el gasto se guarda al instante y aparece "Guardado · Deshacer" durante 5 segundos.
 5. La pantalla vuelve a 0, lista para el siguiente gasto.
 
@@ -90,8 +93,8 @@ Pantallas (barra inferior con 4 pestañas):
 
 | Pantalla | Qué muestra | Acciones |
 | --- | --- | --- |
-| Registrar | Monto grande, chip de moneda, cámara, nota, teclado y cuadrícula de categorías (3 columnas, botones de mínimo 64 px) | Guardar con un toque, deshacer |
-| Historial | Gastos agrupados por día, del más reciente al más antiguo, con miniatura si hay foto | Tocar para editar, borrar o ver la foto; filtrar por mes y categoría |
+| Registrar | Monto grande, chips de fecha, moneda y cuenta, cámara, nota, teclado y cuadrícula de categorías (3 columnas, botones de mínimo 64 px) | Guardar con un toque, deshacer |
+| Historial | Gastos agrupados por día, del más reciente al más antiguo, con miniatura si hay foto | Tocar para editar, borrar o ver la foto; filtrar por mes, categoría y cuenta |
 | Resumen | Total del mes por moneda y por categoría, con barras horizontales simples | Cambiar de mes |
 | Ajustes | Categorías, monedas, estado del almacenamiento, exportar, respaldar y restaurar | Ver sección de exportación |
 
@@ -113,9 +116,9 @@ Reglas: fecha ISO para que Sheets la reconozca, monto sin separador de miles, no
 **Formato del CSV**, codificado en UTF-8 con BOM:
 
 ```csv
-id,fecha,hora,monto,moneda,categoria,nota,foto
-3f2a9c1e-5b7d-4e8a-9c21-7d4e5f6a8b90,2026-10-07,13:42,45000,COP,Comida,Almuerzo con equipo,3f2a9c1e.jpg
-b81d22f0-1c4e-4a7b-8d3f-0e9a6b5c4d21,2026-10-07,18:05,12.5,USD,Compras,Suscripción,
+id,fecha,hora,monto,moneda,categoria,cuenta,nota,foto
+3f2a9c1e-5b7d-4e8a-9c21-7d4e5f6a8b90,2026-10-07,13:42,45000,COP,Comida,Personal,Almuerzo con equipo,3f2a9c1e.jpg
+b81d22f0-1c4e-4a7b-8d3f-0e9a6b5c4d21,2026-10-07,18:05,12.5,USD,Compras,Negocio,Suscripción,
 ```
 
 a entre comillas si tiene comas. En Ajustes hay un selector "Decimal con punto / Decimal con coma"; con coma, el separador de columnas pasa a ser punto y coma. Si la hoja de Sheets está configurada en español de Colombia, se usa la opción con coma.
@@ -129,7 +132,7 @@ a entre comillas si tiene comas. En Ajustes hay un selector "Decimal con punto /
 
 **Importar en Google Sheets.** Crear una vez una hoja "Gastos" con la fila de encabezados. Luego, con cada exportación: Archivo → Importar → elegir el CSV → "Agregar a la hoja actual". La columna `id` permite detectar duplicados con `COUNTIF`. Las fotos del ZIP se suben a la carpeta Drive "Gastos/fotos" y la columna `foto` indica qué archivo corresponde a cada gasto.
 
-**Respaldo y restauración.** "Crear respaldo" genera `respaldo_gastos_AAAA-MM-DD.json` con gastos, categorías, ajustes y fotos en base64. "Restaurar" lo lee y fusiona por `id` sin duplicar. Si pasan más de 7 días sin respaldo, la pantalla Registrar muestra un aviso discreto.
+**Respaldo y restauración.** "Crear respaldo" genera `respaldo_gastos_AAAA-MM-DD.json` con gastos, cuentas, categorías, ajustes y fotos en base64. "Restaurar" lo lee y fusiona por `id` sin duplicar. Si pasan más de 7 días sin respaldo, la pantalla Registrar muestra un aviso discreto.
 
 ## Fases de desarrollo y criterios de aceptación
 
@@ -145,6 +148,11 @@ Cada fase termina con algo que se puede probar en el celular; Claude Code debe h
    - [ ] Editar fecha, monto, moneda, categoría y nota actualiza `editadoEn`.
 4. **Monedas y notas.** Chip de moneda, moneda predeterminada configurable, campo de nota.
    - [ ] COP se muestra sin decimales; USD y EUR con 2.
+4b. **Cuentas.** Tabla `cuentas` y campo `cuentaId` en gastos (migración de Dexie a versionEsquema 2: los gastos existentes pasan a "Personal"), chip de cuenta en Registrar (oculto con una sola cuenta activa; se recuerda en `ultimaCuenta`), filtro de cuenta y cuenta visible por fila en Historial, cambio de cuenta al editar, y sección "Cuentas" en Ajustes (crear, renombrar, emoji, reordenar, predeterminada, archivar/desarchivar, borrar solo sin gastos).
+   - [ ] La migración conserva todos los gastos existentes (ni se pierden ni se duplican) y los asigna a "Personal".
+   - [ ] Registrar un gasto sigue tomando 3 toques; el chip de cuenta cambia de color si no es la predeterminada y el aviso "Guardado · Deshacer" nombra la cuenta.
+   - [ ] Historial filtra por cuenta combinado con mes y categoría; los totales por día respetan el filtro y siguen separados por moneda.
+   - [ ] Una cuenta con gastos no se puede borrar, solo archivar; siempre queda una cuenta activa.
 5. **Fotos del recibo.** Cámara, compresión, miniatura en historial, visor a pantalla completa.
    - [ ] Cada foto guardada pesa menos de 400 KB.
 6. **Exportación.** CSV y ZIP, menú Compartir, "Solo nuevos".

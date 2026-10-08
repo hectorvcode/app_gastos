@@ -21,6 +21,7 @@ function gasto(p: Partial<Gasto> & { dia?: string; hora?: string } = {}): Gasto 
     monto: 1000,
     moneda: 'COP',
     categoriaId: 'comida',
+    cuentaId: 'personal',
     nota: '',
     fotoId: null,
     creadoEn: '2026-10-01T00:00:00.000Z',

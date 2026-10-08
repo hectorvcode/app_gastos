@@ -13,6 +13,7 @@ function gasto(p: Partial<Gasto> = {}): Gasto {
     monto: 45000,
     moneda: 'COP',
     categoriaId: 'comida',
+    cuentaId: 'personal',
     nota: '',
     fotoId: null,
     creadoEn: '2026-10-07T15:00:00.000Z',

@@ -32,6 +32,18 @@ export function filtrarPorCategoria(gastos: readonly Gasto[], categoriaId: strin
   return categoriaId ? gastos.filter((g) => g.categoriaId === categoriaId) : [...gastos];
 }
 
+export function filtrarPorCuenta(gastos: readonly Gasto[], cuentaId: string | null): Gasto[] {
+  return cuentaId ? gastos.filter((g) => g.cuentaId === cuentaId) : [...gastos];
+}
+
+/** Aplica a la vez los filtros de categoría y cuenta (null = todas). El mes se filtra al leer. */
+export function filtrarGastos(
+  gastos: readonly Gasto[],
+  filtros: { categoriaId: string | null; cuentaId: string | null },
+): Gasto[] {
+  return filtrarPorCuenta(filtrarPorCategoria(gastos, filtros.categoriaId), filtros.cuentaId);
+}
+
 export function tituloDia(key: string, hoy: string): string {
   if (key === hoy) return 'Hoy';
   if (key === addDays(hoy, -1)) return 'Ayer';
@@ -65,6 +77,8 @@ export interface CambiosGasto {
   /** Texto escrito por el usuario; admite coma o punto decimal */
   monto: string;
   categoriaId: string;
+  /** Si se omite, se conserva la cuenta del gasto */
+  cuentaId?: string;
   moneda: string;
   /** Texto de la nota (puede ir vacío) */
   nota: string;
@@ -101,17 +115,21 @@ export function validarEdicion(original: Gasto, c: CambiosGasto, ahora: Date): R
   const nota = c.nota.trim();
   if (!/^[A-Z]{3}$/.test(c.moneda)) return { ok: false, error: 'Elige una moneda.' };
 
+  const cuentaId = c.cuentaId ?? original.cuentaId;
+  if (!cuentaId) return { ok: false, error: 'Elige una cuenta.' };
+
   const cambio =
     fecha !== original.fecha ||
     monto !== original.monto ||
     c.categoriaId !== original.categoriaId ||
+    cuentaId !== original.cuentaId ||
     c.moneda !== original.moneda ||
     nota !== original.nota;
   if (!cambio) return { ok: true, gasto: original, cambio: false };
   return {
     ok: true,
     cambio: true,
-    gasto: { ...original, fecha, monto, moneda: c.moneda, nota, categoriaId: c.categoriaId, editadoEn: ahora.toISOString() },
+    gasto: { ...original, fecha, monto, moneda: c.moneda, nota, categoriaId: c.categoriaId, cuentaId, editadoEn: ahora.toISOString() },
   };
 }
 

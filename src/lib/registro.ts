@@ -1,5 +1,6 @@
 import type { Gasto } from '../types';
 import { generarUuid } from './compat';
+import { CUENTA_PERSONAL_ID } from './cuentas';
 import { addDays, buildFechaIso, dateKey } from './dates';
 import { adaptarEntry, applyKey, entryToNumber, type Key } from './money';
 import { recortarNota } from './nota';
@@ -30,6 +31,8 @@ export class SesionRegistro {
   entry = '';
   /** Nota pendiente: se guarda con el siguiente gasto y luego se limpia. */
   nota = '';
+  /** Cuenta en la que se guarda el siguiente gasto; la fija la UI al abrir y al elegir. */
+  cuentaId: string = CUENTA_PERSONAL_ID;
   /** null = "Hoy" (sigue al reloj, incluso pasada la medianoche). */
   private fechaElegida: string | null = null;
   private ultimaActividad: number;
@@ -117,6 +120,7 @@ export class SesionRegistro {
         monto,
         moneda: this.moneda,
         categoriaId,
+        cuentaId: this.cuentaId,
         nota: recortarNota(notaPrevia.trim()),
         fotoId: null,
         creadoEn: iso,

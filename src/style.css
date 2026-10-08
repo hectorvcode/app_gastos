@@ -657,3 +657,9 @@ button {
   color: var(--muted);
   text-align: center;
 }
+
+/* ---------- Fase 4b: cuentas ---------- */
+.moneda-fila .cuenta-total {
+  grid-column: 1 / -1;
+  margin-top: -4px;
+}
