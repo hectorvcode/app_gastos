@@ -1,11 +1,23 @@
 import { db, leerParaExportar, repoAjustes, repoMarcas } from '../db';
-import { compartirArchivo } from '../lib/compartir';
+import { crearBitacora } from '../lib/bitacora';
+import {
+  compartirArchivo,
+  compartirArchivos,
+  esDispositivoMovil,
+  opcionesDeEntrega,
+  planificarLote,
+  puedeCompartir,
+  type PlanLote,
+} from '../lib/compartir';
 import { mensajeDeError } from '../lib/compat';
 import { etiquetaCuenta, ordenadas } from '../lib/cuentas';
 import { decimalDeAjuste, type Decimal } from '../lib/csv';
 import { dateKey, desplazarMes, etiquetaMes, formatDdMmAaaa, isoAFechaHora, mesDe, type Mes } from '../lib/dates';
 import {
+  AVISO_ZIP_HTTP,
+  debeAvisarZipHttp,
   entregar,
+  entregarTanda,
   mensajeVacio,
   pendienteDeExportar,
   prepararArchivo,
@@ -17,6 +29,7 @@ import {
   type Formato,
   type MarcaPrevia,
   type ResultadoEntrega,
+  type ResultadoTanda,
 } from '../lib/exportar';
 import { textoPeso } from '../lib/fotos';
 import type { Cuenta } from '../types';
@@ -42,17 +55,31 @@ function boton(texto: string, alTocar: () => void, className = 'cat-op'): HTMLBu
   return b;
 }
 
+const bitacora = crearBitacora();
+const registroPantalla = document.createElement('pre');
+registroPantalla.className = 'exportar-registro';
+/** Anota un paso en la consola (chrome://inspect) y en "Opciones avanzadas → Registro". */
+function anotar(paso: string, detalle?: unknown): void {
+  bitacora.anotar(paso, detalle);
+  registroPantalla.textContent = bitacora.texto();
+}
+
 /** Descarga directa: en escritorio y siempre que no haya Web Share (p. ej. por http://<IP-LAN>). */
 function descargar(archivo: File): void {
+  anotar('descarga: inicio', { nombre: archivo.name, tipo: archivo.type, bytes: archivo.size });
   // `archivo` ya llega con tipo genérico (ver archivoParaDescarga) y su nombre exacto.
   const url = URL.createObjectURL(archivo);
   const a = el('a');
   a.href = url;
   a.download = archivo.name;
+  a.rel = 'noopener';
+  a.style.display = 'none';
   document.body.append(a);
   a.click();
-  a.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  anotar('descarga: clic en el enlace hecho');
+  // El enlace y la URL se conservan un buen rato: en la app instalada, soltarlos antes puede cortar la descarga.
+  window.setTimeout(() => a.remove(), 1000);
+  window.setTimeout(() => URL.revokeObjectURL(url), 10 * 60_000);
 }
 
 const textoFechaHora = (iso: string): string => {
@@ -96,6 +123,12 @@ export function crearSeccionExportar(): SeccionExportar {
   let timerMarca: number | undefined;
   let preparado: { listo: ArchivoListo } | null = null;
   let avanzadasAbiertas = false;
+  // Estado del panel "Archivo listo": opciones que Chrome ya rechazó y siguiente tanda de "datos y fotos".
+  let estadoPanel: { zipRechazado: boolean; loteRechazado: string | null; siguienteTanda: number } = {
+    zipRechazado: false,
+    loteRechazado: null,
+    siguienteTanda: 0,
+  };
 
   const hoy = (): string => dateKey(new Date());
   const mesActual = (): Mes => mes ?? mesDe(new Date());
@@ -189,6 +222,9 @@ export function crearSeccionExportar(): SeccionExportar {
   const btnZip = el('button', 'btn-primario', 'Exportar con fotos (ZIP)');
   btnZip.type = 'button';
   const ayudaZip = el('p', 'hoja-ayuda');
+  // Por HTTP (p. ej. http://<IP-LAN>:4173) Chrome puede bloquear la descarga de un ZIP.
+  const avisoHttp = el('p', 'hoja-ayuda aviso-http', AVISO_ZIP_HTTP);
+  avisoHttp.hidden = !debeAvisarZipHttp(window.isSecureContext, 'zip');
   btnCsv.addEventListener('click', () => void exportar('csv'));
   btnZip.addEventListener('click', () => void exportar('zip'));
 
@@ -213,7 +249,13 @@ export function crearSeccionExportar(): SeccionExportar {
   const btnPunto = boton('Decimal con punto', () => void cambiarDecimal('punto'));
   filaDecimal.append(btnComa, btnPunto);
   const ayudaDecimal = el('p', 'hoja-ayuda');
-  cuerpoAvanzadas.append(titulo('Separador decimal del CSV'), filaDecimal, ayudaDecimal);
+  cuerpoAvanzadas.append(
+    titulo('Separador decimal del CSV'),
+    filaDecimal,
+    ayudaDecimal,
+    titulo('Registro de la última exportación'),
+    registroPantalla,
+  );
   btnAvanzadas.addEventListener('click', () => {
     avanzadasAbiertas = !avanzadasAbiertas;
     pintarAvanzadas();
@@ -256,6 +298,7 @@ export function crearSeccionExportar(): SeccionExportar {
     ayudaCsv,
     btnZip,
     ayudaZip,
+    avisoHttp,
     progreso,
     textoProgreso,
     panelListo,
@@ -412,6 +455,7 @@ export function crearSeccionExportar(): SeccionExportar {
   }
 
   async function terminar(listo: ArchivoListo, r: ResultadoEntrega): Promise<void> {
+    anotar('entrega: resultado', { estado: r.estado });
     panelListo.hidden = true;
     if (r.estado === 'cancelado') {
       resultado.textContent = 'Compartir cancelado: no se marcó nada como exportado.';
@@ -419,6 +463,12 @@ export function crearSeccionExportar(): SeccionExportar {
       return;
     }
     if (r.estado === 'requiere-gesto') {
+      mostrarPanelListo(listo, true);
+      return;
+    }
+    if (r.estado === 'rechazado') {
+      estadoPanel.zipRechazado = true;
+      mostrarError('Chrome no permite compartir este archivo. Usa "Compartir datos y fotos" o descárgalo.');
       mostrarPanelListo(listo);
       return;
     }
@@ -431,7 +481,8 @@ export function crearSeccionExportar(): SeccionExportar {
       // Compartir terminado no garantiza que el destino lo reciba: también se puede deshacer la marca.
       if (listo.plan.marca) mostrarDeshacerMarca(r.previa, marcados);
     } else {
-      resultado.textContent = `Se descargó ${listo.archivo.name} en tu carpeta de descargas. No puedo saber si llegó a su destino.${detalle}${faltan}`;
+      const ayuda = esDispositivoMovil() ? ' Si no ves la descarga, revisa las notificaciones de Chrome.' : '';
+      resultado.textContent = `Se descargó ${listo.archivo.name} en tu carpeta de descargas. No puedo saber si llegó a su destino.${ayuda}${detalle}${faltan}`;
       if (listo.plan.marca) mostrarDeshacerMarca(r.previa, marcados);
     }
     if (faltan) mostrarAviso(faltan.trim());
@@ -440,14 +491,15 @@ export function crearSeccionExportar(): SeccionExportar {
     void actualizarResumen();
   }
 
-  async function entregarArchivo(listo: ArchivoListo, forzarDescarga: boolean): Promise<void> {
+  async function entregarArchivo(listo: ArchivoListo, forzarDescarga: boolean, toqueReciente = false): Promise<void> {
     // Mientras el menú Compartir está abierto la promesa no se resuelve: se avisa para que no parezca colgado.
     if (!forzarDescarga) textoProgreso.textContent = 'Esperando el menú Compartir…';
+    anotar('entrega: inicio', { archivo: listo.archivo.name, forzarDescarga, toqueReciente });
     let r: ResultadoEntrega;
     try {
       r = await entregar(
         listo,
-        { compartir: (f) => compartirArchivo(f), descargar },
+        { compartir: (f) => compartirArchivo(f, undefined, { toqueReciente, anotar }), descargar },
         repoMarcas,
         () => new Date(),
         forzarDescarga,
@@ -458,28 +510,134 @@ export function crearSeccionExportar(): SeccionExportar {
     await terminar(listo, r);
   }
 
-  /** Chrome exige un toque reciente para compartir: si armar el archivo tardó, se pide uno nuevo. */
-  function mostrarPanelListo(listo: ArchivoListo): void {
+  /** Comparte la siguiente tanda de "datos y fotos" (cada tanda necesita un toque nuevo). */
+  async function compartirSiguienteTanda(listo: ArchivoListo, tandas: File[][]): Promise<void> {
+    const i = estadoPanel.siguienteTanda;
+    anotar('lote: compartir tanda', { tanda: i + 1, de: tandas.length, archivos: tandas[i]?.length });
+    textoProgreso.textContent = 'Esperando el menú Compartir…';
+    let r: ResultadoTanda;
+    try {
+      r = await entregarTanda(
+        tandas,
+        i,
+        listo.plan,
+        (files) => compartirArchivos(files, undefined, { toqueReciente: true, anotar }),
+        repoMarcas,
+        () => new Date(),
+      );
+    } finally {
+      textoProgreso.textContent = '';
+    }
+    anotar('lote: resultado', { estado: r.estado });
+    if (r.estado === 'tanda') {
+      estadoPanel.siguienteTanda = i + 1;
+      resultado.textContent = `Tanda ${i + 1} de ${r.total} compartida. Toca el botón para la tanda ${i + 2}. Solo se marca como exportado al terminar la última.`;
+      mostrarPanelListo(listo);
+      mostrarResultado();
+    } else if (r.estado === 'completo') {
+      preparado = null;
+      panelListo.hidden = true;
+      const marcados = listo.plan.marca ? listo.gastos + listo.eliminados : 0;
+      const detalle = listo.plan.marca ? ` ${marcados} marcados como exportados.` : '';
+      resultado.textContent = `Listo: datos y fotos compartidos (${listo.lote?.length ?? 0} archivos en ${r.total} ${r.total === 1 ? 'tanda' : 'tandas'}).${detalle}`;
+      if (listo.plan.marca) mostrarDeshacerMarca(r.previa, marcados);
+      mostrarResultado();
+      await pintarUltima();
+      void actualizarResumen();
+    } else if (r.estado === 'cancelado') {
+      resultado.textContent = `Compartir cancelado en la tanda ${i + 1} de ${tandas.length}: no se marcó nada como exportado. Toca el botón para reintentar esa tanda.`;
+      mostrarPanelListo(listo);
+      mostrarResultado();
+    } else {
+      estadoPanel.loteRechazado = `Chrome no permitió compartir la tanda ${i + 1} de ${tandas.length}.`;
+      mostrarError(`${estadoPanel.loteRechazado} Descarga el ZIP en su lugar.`);
+      mostrarPanelListo(listo);
+    }
+  }
+
+  /**
+   * "Archivo listo": se muestran solo las opciones que Chrome permite (según canShare), cada una con un toque
+   * reciente. Para un ZIP en el celular siempre se pasa por aquí: armarlo tarda y el toque original ya expiró.
+   */
+  function mostrarPanelListo(listo: ArchivoListo, avisar = false): void {
     preparado = { listo };
-    const act = (forzar: boolean) => async () => {
-      if (ocupado) return;
+    const movil = esDispositivoMovil();
+    const esZip = listo.lote !== null;
+    const lote: PlanLote | null =
+      esZip && movil
+        ? estadoPanel.loteRechazado
+          ? { ok: false, motivo: estadoPanel.loteRechazado }
+          : planificarLote(listo.lote!)
+        : null;
+    const opciones = opcionesDeEntrega({
+      formato: esZip ? 'zip' : 'csv',
+      movil,
+      puedeCompartirArchivo: movil && !estadoPanel.zipRechazado && puedeCompartir([listo.archivo]),
+      lote,
+    });
+    anotar('panel: opciones', { ...opciones, motivoSinLote: lote && !lote.ok ? lote.motivo : undefined });
+
+    const protegido = (accion: () => Promise<void>, texto: string) => async () => {
+      if (ocupado) {
+        mostrarAviso('Espera a que termine la acción anterior.');
+        return;
+      }
       bloquear(true);
       try {
-        await entregarArchivo(listo, forzar);
+        await accion();
       } catch (e) {
-        mostrarError(`No se pudo compartir el archivo: ${mensajeDeError(e)}`);
+        anotar(`${texto}: error`, { mensaje: mensajeDeError(e) });
+        mostrarError(`${texto}: ${mensajeDeError(e)}`);
       } finally {
         bloquear(false);
       }
     };
-    panelListo.replaceChildren(
-      el('p', 'hoja-ayuda', `El archivo ${listo.archivo.name} está listo. Toca para compartirlo.`),
-      boton('Compartir', act(false), 'btn-primario'),
-      boton('Descargar en lugar de compartir', act(true), 'cat-op'),
+
+    const partes: HTMLElement[] = [el('p', 'hoja-ayuda', `El archivo ${listo.archivo.name} está listo. Elige qué hacer:`)];
+    if (opciones.compartirLote && lote?.ok) {
+      const t = lote.tandas;
+      const i = Math.min(estadoPanel.siguienteTanda, t.length - 1);
+      partes.push(
+        boton(
+          t.length === 1 ? `Compartir datos y fotos (${listo.lote!.length} archivos)` : `Compartir datos y fotos · tanda ${i + 1} de ${t.length}`,
+          protegido(() => compartirSiguienteTanda(listo, t), 'No se pudo compartir los datos y fotos'),
+          'btn-primario',
+        ),
+        el(
+          'p',
+          'hoja-ayuda',
+          t.length === 1
+            ? 'Comparte el CSV y cada foto como archivos separados.'
+            : `Comparte el CSV y cada foto como archivos separados, en ${t.length} tandas (Chrome limita cuántos admite cada vez). Solo se marca como exportado al terminar la última.`,
+        ),
+      );
+    } else if (esZip && movil) {
+      partes.push(el('p', 'hoja-ayuda', `No se pueden compartir datos y fotos por separado. ${lote && !lote.ok ? lote.motivo : ''}`.trim()));
+    }
+    if (opciones.compartirArchivo) {
+      partes.push(
+        boton(
+          esZip ? 'Compartir el ZIP' : 'Compartir',
+          protegido(() => entregarArchivo(listo, false, true), 'No se pudo compartir el archivo'),
+          esZip ? 'cat-op' : 'btn-primario',
+        ),
+      );
+    } else if (esZip && movil) {
+      partes.push(el('p', 'hoja-ayuda', 'Chrome no permite compartir un archivo ZIP.'));
+    }
+    partes.push(
+      boton(
+        esZip ? 'Descargar el ZIP' : 'Descargar',
+        protegido(() => entregarArchivo(listo, true), 'No se pudo descargar el archivo'),
+        'cat-op',
+      ),
     );
+    panelListo.replaceChildren(...partes);
     panelListo.hidden = false;
-    resultado.textContent = '';
-    mostrarAviso(`El archivo ${listo.archivo.name} está listo: toca Compartir o Descargar.`);
+    if (avisar) {
+      resultado.textContent = '';
+      mostrarAviso(`El archivo ${listo.archivo.name} está listo: elige cómo compartirlo o descargarlo.`);
+    }
     mostrarResultado(panelListo);
   }
 
@@ -488,6 +646,15 @@ export function crearSeccionExportar(): SeccionExportar {
     ocultarToast();
     resultado.textContent = '';
     panelListo.hidden = true;
+    estadoPanel = { zipRechazado: false, loteRechazado: null, siguienteTanda: 0 };
+    bitacora.limpiar();
+    anotar('exportar: inicio', {
+      formato,
+      seguro: window.isSecureContext,
+      movil: esDispositivoMovil(),
+      standalone: window.matchMedia?.('(display-mode: standalone)').matches ?? false,
+      agente: navigator.userAgent,
+    });
     const a = alcance();
     if (a.tipo === 'rango') {
       const problema = validarRango(a.desde, a.hasta, hoy());
@@ -501,6 +668,7 @@ export function crearSeccionExportar(): SeccionExportar {
       const ahora = new Date();
       const datos = await leerParaExportar();
       const seleccion = seleccionar(datos.gastos, datos.eliminados, a, cuentaId);
+      anotar('exportar: selección', { gastos: seleccion.gastos.length, eliminados: seleccion.eliminados.length });
       if (totalFilas(seleccion) === 0) {
         resultado.textContent = `${mensajeVacio(a)}.`;
         mostrarAviso(mensajeVacio(a));
@@ -509,6 +677,7 @@ export function crearSeccionExportar(): SeccionExportar {
       }
       progreso.hidden = false;
       progreso.value = 0;
+      const t0 = performance.now();
       const listo = await prepararArchivo(
         {
           seleccion,
@@ -526,10 +695,19 @@ export function crearSeccionExportar(): SeccionExportar {
           progreso.value = fraccion;
         },
       );
+      anotar('exportar: archivo armado', {
+        nombre: listo.archivo.name,
+        tipo: listo.archivo.type,
+        bytes: listo.archivo.size,
+        ms: Math.round(performance.now() - t0),
+        archivosDelLote: listo.lote?.length ?? 0,
+      });
       progreso.hidden = true;
       textoProgreso.textContent = '';
-      await entregarArchivo(listo, false);
+      if (formato === 'zip' && esDispositivoMovil()) mostrarPanelListo(listo, true);
+      else await entregarArchivo(listo, false);
     } catch (e) {
+      anotar('exportar: error', { mensaje: mensajeDeError(e) });
       mostrarError(`No se pudo exportar: ${mensajeDeError(e)}`);
     } finally {
       progreso.hidden = true;

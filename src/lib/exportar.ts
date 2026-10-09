@@ -16,6 +16,11 @@ export type Formato = 'csv' | 'zip';
 export const MENSAJE_SIN_NUEVOS = 'No hay gastos nuevos desde la última exportación';
 export const MENSAJE_SIN_GASTOS = 'No hay gastos con esos criterios';
 
+export const AVISO_ZIP_HTTP = 'Por HTTP, Chrome puede bloquear la descarga del ZIP; toca Conservar en el aviso de Chrome.';
+
+/** Avisar antes de exportar un ZIP cuando la página no es un contexto seguro (http://<IP-LAN>). */
+export const debeAvisarZipHttp = (contextoSeguro: boolean, formato: Formato): boolean => !contextoSeguro && formato === 'zip';
+
 /** Un gasto sale en "Solo nuevos" si nunca se exportó o se editó después de la última exportación. */
 export const pendienteDeExportar = (g: Gasto): boolean => g.exportadoEn === null || g.editadoEn > g.exportadoEn;
 
@@ -219,6 +224,14 @@ export async function armarZip(
   );
 }
 
+/** Archivos para "Compartir datos y fotos": el CSV primero y luego cada JPEG con el nombre de la columna foto. */
+export function armarLote(csv: string, nombreCsv: string, fotos: readonly FotoParaZip[]): File[] {
+  return [
+    new File([csv], nombreCsv, { type: 'text/csv' }),
+    ...fotos.map((f) => new File([f.blob], f.nombre, { type: 'image/jpeg' })),
+  ];
+}
+
 // ---------- Armado del archivo ----------
 
 export interface PlanMarca {
@@ -244,6 +257,8 @@ export interface EntradaArchivo {
 
 export interface ArchivoListo {
   archivo: File;
+  /** Solo en ZIP: el CSV y los JPEG como archivos separados (CSV primero, mismos nombres que la columna foto). */
+  lote: File[] | null;
   gastos: number;
   eliminados: number;
   /** Gastos cuya foto no se encontró: salen sin foto. */
@@ -286,7 +301,9 @@ export async function prepararArchivo(
 
   const csv = generarCsv(construirFilas(e.seleccion, e.categorias, e.cuentas, nombresFoto), e.decimal);
   let archivo: File;
+  let lote: File[] | null = null;
   if (e.formato === 'zip') {
+    lote = armarLote(csv, nombreCsv, fotosZip);
     const zip = await armarZip(csv, nombreCsv, fotosZip, (t, f) => onProgreso(t, 0.2 + f * 0.8));
     archivo = new File([zip], base, { type: 'application/zip' });
   } else {
@@ -295,6 +312,7 @@ export async function prepararArchivo(
   onProgreso('Listo', 1);
   return {
     archivo,
+    lote,
     gastos: e.seleccion.gastos.length,
     eliminados: e.seleccion.eliminados.length,
     fotosFaltantes,
@@ -363,7 +381,9 @@ export type ResultadoEntrega =
   /** Descargado: no se sabe si llegó, por eso la marca se puede deshacer. */
   | { estado: 'descargado'; previa: MarcaPrevia }
   | { estado: 'cancelado' }
-  | { estado: 'requiere-gesto' };
+  | { estado: 'requiere-gesto' }
+  /** Chrome no permite compartir este archivo aunque el toque era reciente. */
+  | { estado: 'rechazado' };
 
 /**
  * Entrega el archivo y, solo si salió, marca lo exportado. Si el usuario cancela el menú Compartir
@@ -382,7 +402,7 @@ export async function entregar(
     estado = 'descargado';
   } else {
     const r = await io.compartir(listo.archivo);
-    if (r === 'cancelado' || r === 'requiere-gesto') return { estado: r };
+    if (r === 'cancelado' || r === 'requiere-gesto' || r === 'rechazado') return { estado: r };
     if (r === 'compartido') {
       estado = 'compartido';
     } else {
@@ -392,6 +412,33 @@ export async function entregar(
   }
   const previa = await repo.marcar(listo.plan, ahora().toISOString());
   return { estado, previa };
+}
+
+export type ResultadoTanda =
+  | { estado: 'tanda'; indice: number; total: number }
+  | { estado: 'completo'; total: number; previa: MarcaPrevia }
+  | { estado: 'cancelado' | 'rechazado' };
+
+/**
+ * Comparte la tanda `indice` (cada una necesita un toque nuevo). Solo cuando se comparte la última se marca
+ * lo exportado; si el usuario cancela o Chrome rechaza una tanda, no se marca nada.
+ */
+export async function entregarTanda(
+  tandas: readonly (readonly File[])[],
+  indice: number,
+  plan: PlanMarca,
+  compartir: (archivos: File[]) => Promise<ResultadoCompartir>,
+  repo: RepoMarcas,
+  ahora: () => Date,
+): Promise<ResultadoTanda> {
+  const tanda = tandas[indice];
+  if (!tanda) throw new Error(`No existe la tanda ${indice + 1}`);
+  const r = await compartir([...tanda]);
+  if (r === 'cancelado') return { estado: 'cancelado' };
+  if (r !== 'compartido') return { estado: 'rechazado' };
+  if (indice + 1 < tandas.length) return { estado: 'tanda', indice, total: tandas.length };
+  const previa = await repo.marcar(plan, ahora().toISOString());
+  return { estado: 'completo', total: tandas.length, previa };
 }
 
 // ---------- Gastos eliminados ----------

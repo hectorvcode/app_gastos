@@ -989,3 +989,21 @@ button {
 .edit-monto-input {
   width: 100%;
 }
+
+.aviso-http {
+  color: var(--alerta);
+  font-weight: 700;
+}
+
+.exportar-registro {
+  margin: 0;
+  padding: 8px;
+  max-height: 220px;
+  overflow: auto;
+  border-radius: 10px;
+  background: var(--surface-2);
+  font-size: 0.7rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+  user-select: text;
+}
