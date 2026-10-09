@@ -97,3 +97,13 @@ export async function cargarMonedaInicial(repo: RepoAjustes): Promise<string> {
 export async function guardarUltimaMoneda(repo: RepoAjustes, moneda: string): Promise<void> {
   await repo.set('ultimaMoneda', moneda);
 }
+
+/**
+ * Monedas del catálogo en dos grupos: las que se ven al registrar (la predeterminada primero, luego
+ * las visibles en el orden del catálogo) y el resto, que va plegado bajo "Más monedas".
+ */
+export function separarMonedas(config: ConfigMonedas): { principales: InfoMoneda[]; resto: InfoMoneda[] } {
+  const principales = CATALOGO_MONEDAS.filter((m) => m.codigo === config.predeterminada || config.visibles.includes(m.codigo));
+  principales.sort((a, b) => Number(b.codigo === config.predeterminada) - Number(a.codigo === config.predeterminada));
+  return { principales, resto: CATALOGO_MONEDAS.filter((m) => !principales.includes(m)) };
+}

@@ -19,16 +19,17 @@ import {
 } from '../lib/cuentas';
 import {
   alternarVisible,
-  CATALOGO_MONEDAS,
   cargarConfigMonedas,
   elegirPredeterminada,
   guardarConfigMonedas,
   guardarUltimaMoneda,
+  separarMonedas,
   type ConfigMonedas,
   type ResultadoConfig,
 } from '../lib/monedas';
 import type { Cuenta } from '../types';
 import { mostrarAviso, mostrarError } from './avisos';
+import { crearSeccionExportar } from './exportar';
 import { cerrarTecladoConEnter } from './teclado';
 
 function el<K extends keyof HTMLElementTagNameMap>(
@@ -48,7 +49,7 @@ export interface VistaAjustes {
   activar(): Promise<void>;
 }
 
-/** Ajustes: secciones "Monedas", "Cuentas" y "Fotos" (el resto llega en la Fase 7). */
+/** Ajustes: secciones "Monedas", "Cuentas", "Fotos" y "Exportar" (el resto llega en la Fase 7). */
 export function crearAjustes(): VistaAjustes {
   let config: ConfigMonedas | null = null;
   let cuentas: Cuenta[] = [];
@@ -58,18 +59,28 @@ export function crearAjustes(): VistaAjustes {
   const root = el('section', 'ajustes');
   const seccion = el('div', 'ajustes-seccion');
   const lista = el('div', 'monedas-lista');
+  const btnMas = el('button', 'cat-op acordeon-mas');
+  btnMas.type = 'button';
+  const listaResto = el('div', 'monedas-lista');
+  listaResto.hidden = true;
+  let masAbierto = false;
   const mensaje = el('p', 'hoja-ayuda');
   mensaje.setAttribute('role', 'status');
   seccion.append(
-    el('h2', 'hoja-titulo', 'Monedas'),
     el(
       'p',
       'hoja-ayuda',
       'Elige la moneda predeterminada y cuáles aparecen al registrar. La predeterminada siempre está visible.',
     ),
     lista,
+    btnMas,
+    listaResto,
     mensaje,
   );
+  btnMas.addEventListener('click', () => {
+    masAbierto = !masAbierto;
+    pintar();
+  });
 
   // ---------- Sección Cuentas ----------
   const seccionCuentas = el('div', 'ajustes-seccion');
@@ -79,7 +90,6 @@ export function crearAjustes(): VistaAjustes {
   const btnNueva = el('button', 'btn-primario', 'Nueva cuenta');
   btnNueva.type = 'button';
   seccionCuentas.append(
-    el('h2', 'hoja-titulo', 'Cuentas'),
     el(
       'p',
       'hoja-ayuda',
@@ -96,7 +106,6 @@ export function crearAjustes(): VistaAjustes {
   btnModoRecibo.type = 'button';
   btnModoRecibo.setAttribute('role', 'switch');
   seccionFotos.append(
-    el('h2', 'hoja-titulo', 'Fotos'),
     el(
       'p',
       'hoja-ayuda',
@@ -132,7 +141,41 @@ export function crearAjustes(): VistaAjustes {
     if (e.target === hoja) hoja.hidden = true;
   });
 
-  root.append(seccion, seccionCuentas, seccionFotos, hoja, el('p', 'pronto-resto', 'Categorías, almacenamiento, exportar y respaldo: próximamente'));
+  const exportar = crearSeccionExportar();
+
+  // Secciones plegables, Exportar primero; solo una abierta a la vez.
+  const cabeceras: { boton: HTMLButtonElement; cuerpo: HTMLElement }[] = [];
+  function abrirSeccion(abierta: HTMLElement | null): void {
+    for (const c of cabeceras) {
+      const abre = c.cuerpo === abierta;
+      c.cuerpo.hidden = !abre;
+      c.boton.setAttribute('aria-expanded', String(abre));
+      c.boton.querySelector('.acordeon-flecha')!.textContent = abre ? '▲' : '▼';
+    }
+  }
+  function plegable(titulo: string, cuerpo: HTMLElement): HTMLElement {
+    const grupo = el('div', 'acordeon');
+    const boton = el('button', 'acordeon-cabecera');
+    boton.type = 'button';
+    boton.append(el('span', '', titulo), el('span', 'acordeon-flecha'));
+    cuerpo.hidden = true;
+    boton.addEventListener('click', () => {
+      abrirSeccion(cuerpo.hidden ? cuerpo : null);
+      if (!cuerpo.hidden) boton.scrollIntoView?.({ block: 'start' });
+    });
+    cabeceras.push({ boton, cuerpo });
+    grupo.append(boton, cuerpo);
+    return grupo;
+  }
+
+  root.append(
+    plegable('Exportar', exportar.el),
+    plegable('Cuentas', seccionCuentas),
+    plegable('Monedas', seccion),
+    plegable('Fotos', seccionFotos),
+    hoja,
+    el('p', 'pronto-resto', 'Categorías, almacenamiento y respaldo: próximamente'),
+  );
 
   /** Dice por qué se bloqueó una acción: en línea y en el aviso fijo de arriba (siempre a la vista). */
   function avisarRegla(destino: HTMLElement, texto: string): void {
@@ -162,31 +205,36 @@ export function crearAjustes(): VistaAjustes {
   function pintar(): void {
     const c = config;
     if (!c) return;
-    lista.replaceChildren(
-      ...CATALOGO_MONEDAS.map((m) => {
-        const esPred = m.codigo === c.predeterminada;
-        const visible = c.visibles.includes(m.codigo);
-        const fila = el('div', 'moneda-fila');
-        fila.append(el('span', 'moneda-nombre', `${m.codigo} · ${m.nombre}`));
+    const filaMoneda = (m: { codigo: string; nombre: string }): HTMLElement => {
+      const esPred = m.codigo === c.predeterminada;
+      const visible = c.visibles.includes(m.codigo);
+      const fila = el('div', 'moneda-fila');
+      fila.append(el('span', 'moneda-nombre', `${m.codigo} · ${m.nombre}`));
 
-        const btnVisible = el('button', 'cat-op', visible ? 'Visible' : 'Oculta');
-        btnVisible.type = 'button';
-        btnVisible.setAttribute('aria-pressed', String(visible));
-        btnVisible.setAttribute('aria-label', `${m.codigo}: ${visible ? 'visible' : 'oculta'}`);
-        btnVisible.addEventListener('click', () => void aplicar(alternarVisible(c, m.codigo), false));
+      const btnVisible = el('button', 'cat-op', visible ? 'Visible' : 'Oculta');
+      btnVisible.type = 'button';
+      btnVisible.setAttribute('aria-pressed', String(visible));
+      btnVisible.setAttribute('aria-label', `${m.codigo}: ${visible ? 'visible' : 'oculta'}`);
+      btnVisible.addEventListener('click', () => void aplicar(alternarVisible(c, m.codigo), false));
 
-        const btnPred = el('button', 'cat-op', esPred ? 'Predeterminada' : 'Predeterminar');
-        btnPred.type = 'button';
-        btnPred.setAttribute('aria-pressed', String(esPred));
-        btnPred.addEventListener('click', () => {
-          if (esPred) avisarRegla(mensaje, `${m.codigo} ya es la moneda predeterminada. Para cambiarla, elige otra moneda.`);
-          else void aplicar(elegirPredeterminada(c, m.codigo), true);
-        });
+      const btnPred = el('button', 'cat-op', esPred ? 'Predeterminada' : 'Predeterminar');
+      btnPred.type = 'button';
+      btnPred.setAttribute('aria-pressed', String(esPred));
+      btnPred.addEventListener('click', () => {
+        if (esPred) avisarRegla(mensaje, `${m.codigo} ya es la moneda predeterminada. Para cambiarla, elige otra moneda.`);
+        else void aplicar(elegirPredeterminada(c, m.codigo), true);
+      });
 
-        fila.append(btnVisible, btnPred);
-        return fila;
-      }),
-    );
+      fila.append(btnVisible, btnPred);
+      return fila;
+    };
+    const { principales, resto } = separarMonedas(c);
+    lista.replaceChildren(...principales.map(filaMoneda));
+    listaResto.replaceChildren(...resto.map(filaMoneda));
+    btnMas.hidden = resto.length === 0;
+    btnMas.textContent = `${masAbierto ? '▲' : '▼'} Más monedas (${resto.length})`;
+    btnMas.setAttribute('aria-expanded', String(masAbierto));
+    listaResto.hidden = !masAbierto || resto.length === 0;
   }
 
   // ---------- Cuentas ----------
@@ -377,6 +425,7 @@ export function crearAjustes(): VistaAjustes {
   }
 
   async function activar(): Promise<void> {
+    if (!cabeceras.some((c) => !c.cuerpo.hidden)) abrirSeccion(exportar.el);
     config = await cargarConfigMonedas(repoAjustes);
     mensaje.textContent = '';
     mensajeCuentas.textContent = '';
@@ -384,6 +433,7 @@ export function crearAjustes(): VistaAjustes {
     modoRecibo = modoReciboActivo(await repoAjustes.get('modoRecibo'));
     pintarModoRecibo();
     await leerCuentas();
+    await exportar.activar();
   }
 
   return { el: root, activar };

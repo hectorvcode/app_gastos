@@ -1,7 +1,8 @@
 import Dexie, { type Table } from 'dexie';
 import { completarCuenta, CUENTA_INICIAL, CUENTA_PERSONAL_ID } from './lib/cuentas';
+import { aplicarMarca, eliminadoDe, restaurarTrasDeshacer, type MarcaPrevia, type PlanMarca } from './lib/exportar';
 import { limpiarFotosHuerfanas } from './lib/fotos';
-import type { Ajuste, Categoria, Cuenta, Foto, Gasto } from './types';
+import type { Ajuste, Categoria, Cuenta, Eliminado, Foto, Gasto } from './types';
 
 export const CATEGORIAS_INICIALES: Categoria[] = [
   ['comida', 'Comida', '🍽️'],
@@ -27,7 +28,7 @@ export const AJUSTES_INICIALES: Record<string, unknown> = {
   monedasVisibles: ['COP', 'USD', 'EUR'],
   ultimaExportacion: null,
   cuentaPredeterminada: CUENTA_PERSONAL_ID,
-  versionEsquema: 2,
+  versionEsquema: 3,
 };
 
 class GastosDB extends Dexie {
@@ -35,6 +36,7 @@ class GastosDB extends Dexie {
   fotos!: Table<Foto, string>;
   categorias!: Table<Categoria, string>;
   cuentas!: Table<Cuenta, string>;
+  eliminados!: Table<Eliminado, string>;
   ajustes!: Table<Ajuste, string>;
 
   constructor() {
@@ -62,6 +64,13 @@ class GastosDB extends Dexie {
           .modify((g: { cuentaId?: string }) => {
             g.cuentaId = completarCuenta(g).cuentaId;
           });
+      });
+    // Fase 6: gastos eliminados que ya se habían exportado. Solo se agrega una tabla: los datos
+    // existentes no se tocan, y si algo falla Dexie deja la base en la versión 2.
+    this.version(3)
+      .stores({ eliminados: 'id, cuentaId' })
+      .upgrade(async (tx) => {
+        await tx.table('ajustes').put({ clave: 'versionEsquema', valor: 3 });
       });
     this.on('populate', (tx) => {
       void tx.table('cuentas').bulkAdd([CUENTA_INICIAL]);
@@ -143,4 +152,66 @@ export const repoBorrador = {
 export const repoAjustes = {
   get: (clave: string): Promise<unknown> => getAjuste<unknown>(clave, undefined),
   set: setAjuste,
+};
+
+// ---------- Fase 6: exportación ----------
+
+/** Borra el gasto desde Historial; si ya se había exportado, deja el registro del borrado (misma transacción). */
+export function eliminarGastoRegistrando(id: string): Promise<void> {
+  return db.transaction('rw', db.gastos, db.eliminados, async () => {
+    const g = await db.gastos.get(id);
+    await db.gastos.delete(id);
+    const e = g ? eliminadoDe(g, new Date()) : null;
+    if (e) await db.eliminados.put(e);
+  });
+}
+
+/** Deshacer del borrado en Historial: devuelve el gasto y quita el registro del borrado. */
+export function restaurarGastoEliminado(g: Gasto): Promise<void> {
+  return db.transaction('rw', db.gastos, db.eliminados, async () => {
+    const registro = await db.eliminados.get(g.id);
+    await db.gastos.add(restaurarTrasDeshacer(g, registro !== undefined));
+    if (registro) await db.eliminados.delete(g.id);
+  });
+}
+
+/** Lo necesario para exportar, leído de una vez. */
+export async function leerParaExportar(): Promise<{
+  gastos: Gasto[];
+  eliminados: Eliminado[];
+  categorias: Categoria[];
+  cuentas: Cuenta[];
+}> {
+  const [gastos, eliminados, categorias, cuentas] = await Promise.all([
+    db.gastos.toArray(),
+    db.eliminados.toArray(),
+    db.categorias.toArray(),
+    db.cuentas.toArray(),
+  ]);
+  return { gastos, eliminados, categorias, cuentas };
+}
+
+export const repoMarcas = {
+  marcar(plan: PlanMarca, ultimaExportacion: string): Promise<MarcaPrevia> {
+    return db.transaction('rw', db.gastos, db.eliminados, db.ajustes, async () => {
+      const ultimaPrevia = (await db.ajustes.get('ultimaExportacion'))?.valor ?? null;
+      const gastos = plan.marca ? (await db.gastos.bulkGet(plan.ids)).filter((g): g is Gasto => g !== undefined) : [];
+      const eliminados = plan.marca
+        ? (await db.eliminados.bulkGet(plan.eliminadosIds)).filter((e): e is Eliminado => e !== undefined)
+        : [];
+      const r = aplicarMarca(gastos, eliminados, plan, ultimaPrevia);
+      await db.gastos.bulkPut(r.gastos);
+      await db.eliminados.bulkDelete(r.eliminadosABorrar);
+      await db.ajustes.put({ clave: 'ultimaExportacion', valor: ultimaExportacion });
+      return r.previa;
+    });
+  },
+  revertir(previa: MarcaPrevia): Promise<void> {
+    return db.transaction('rw', db.gastos, db.eliminados, db.ajustes, async () => {
+      // Solo se restaura exportadoEn: si el gasto se editó entremedio, sus demás cambios se conservan.
+      for (const x of previa.gastos) await db.gastos.update(x.id, { exportadoEn: x.exportadoEn });
+      await db.eliminados.bulkPut(previa.eliminados);
+      await db.ajustes.put({ clave: 'ultimaExportacion', valor: previa.ultimaExportacion });
+    });
+  },
 };

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   alternarVisible,
+  CATALOGO_MONEDAS,
+  separarMonedas,
   cargarConfigMonedas,
   cargarMonedaInicial,
   elegirPredeterminada,
@@ -101,5 +103,18 @@ describe('moneda de Registrar al volver a la pestaña', () => {
   it('si la moneda en uso quedó oculta, cae en la predeterminada', () => {
     const sinEur = normalizarConfig('COP', ['COP', 'USD']);
     expect(resolverMonedaAlActivar('EUR', sinEur, 'COP')).toBe('COP');
+  });
+});
+
+describe('separarMonedas', () => {
+  it('la predeterminada va primero, luego las visibles; el resto queda aparte', () => {
+    const { principales, resto } = separarMonedas({ predeterminada: 'USD', visibles: ['COP', 'USD', 'EUR'] });
+    expect(principales.map((m) => m.codigo)).toEqual(['USD', 'COP', 'EUR']);
+    expect(resto.map((m) => m.codigo)).not.toContain('USD');
+    expect(principales.length + resto.length).toBe(CATALOGO_MONEDAS.length);
+  });
+  it('si la predeterminada no está en visibles, igual aparece arriba', () => {
+    const { principales } = separarMonedas({ predeterminada: 'MXN', visibles: ['COP'] });
+    expect(principales.map((m) => m.codigo)).toEqual(['MXN', 'COP']);
   });
 });

@@ -12,6 +12,14 @@ export interface Gasto {
   exportadoEn: string | null;
 }
 
+/** Gasto borrado que ya había salido en una exportación: sirve para avisar a Sheets en la siguiente. */
+export interface Eliminado {
+  id: string;
+  cuentaId: string;
+  /** ISO del borrado (el instante en que se tocó "Eliminar"). */
+  eliminadoEn: string;
+}
+
 export interface Foto {
   id: string;
   blob: Blob;

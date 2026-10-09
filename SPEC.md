@@ -41,7 +41,7 @@ Para evitar que Chrome borre los datos si el teléfono se queda sin espacio, la 
 
 ## Modelo de datos
 
-Cinco tablas en IndexedDB; las fotos van aparte para que listar gastos sea rápido.
+Seis tablas en IndexedDB; las fotos van aparte para que listar gastos sea rápido.
 
 **gastos**
 
@@ -56,7 +56,7 @@ Cinco tablas en IndexedDB; las fotos van aparte para que listar gastos sea rápi
 | nota | string | Opcional, máximo 200 caracteres |
 | fotoId | string o null | Referencia a fotos |
 | creadoEn / editadoEn | string ISO | Para auditoría y exportación incremental |
-| exportadoEn | string ISO o null | Marca la última exportación que lo incluyó |
+| exportadoEn | string ISO o null | Marca la última exportación "Solo nuevos" que lo incluyó (instante en que se armó el archivo) |
 
 **fotos**: id, blob (JPEG comprimido), ancho, alto.
 
@@ -64,7 +64,9 @@ Cinco tablas en IndexedDB; las fotos van aparte para que listar gastos sea rápi
 
 **cuentas**: id, nombre, emoji, orden, archivada. Una cuenta es un libro separado de gastos (Personal, Hogar, Negocio…): solo una etiqueta para registrar y consultar por separado, sin saldo, ingresos, transferencias ni moneda propia. Al iniciar por primera vez se crea "Personal". Una cuenta con gastos no se borra, solo se archiva; siempre queda al menos una cuenta activa y la predeterminada no se puede archivar.
 
-**ajustes** (clave-valor): monedaPredeterminada (COP), monedasVisibles (COP, USD, EUR), cuentaPredeterminada (id de cuenta), ultimaCuenta (última cuenta usada en Registrar), ultimaExportacion, versionEsquema (2 desde la Fase 4b).
+**eliminados**: id (del gasto), cuentaId, eliminadoEn (ISO). Gastos borrados que ya se habían exportado; se vacía lo incluido en cada exportación "Solo nuevos". Se agrega en la Fase 6 (migración de Dexie a versionEsquema 3, que solo añade la tabla).
+
+**ajustes** (clave-valor): monedaPredeterminada (COP), monedasVisibles (COP, USD, EUR), cuentaPredeterminada (id de cuenta), ultimaCuenta (última cuenta usada en Registrar), ultimaExportacion (ISO de la última exportación completada), decimalCsv (`coma` por defecto o `punto`), versionEsquema (3 desde la Fase 6).
 
 No hay conversión de divisas en la app: cada gasto guarda su monto en la moneda original. La conversión se hace en Google Sheets con `GOOGLEFINANCE("CURRENCY:USDCOP")`.
 
@@ -102,35 +104,61 @@ Reglas de interfaz: tema claro y oscuro según el sistema, textos en español, f
 
 ## Exportación a la laptop y Google Sheets
 
-Reglas: fecha ISO para que Sheets la reconozca, monto sin separador de miles, notLa vía recomendada es exportar "Solo nuevos" y compartir el archivo a Google Drive: desde ahí se agrega a una hoja maestra de Sheets sin duplicar filas.
+Reglas: fecha ISO para que Sheets la reconozca, monto sin separador de miles y notas entre comillas cuando lo necesiten. La vía recomendada es exportar "Solo nuevos" y compartir el archivo a Google Drive: desde ahí se agrega a una hoja de Sheets y se conserva la última versión de cada `id`.
 
-**Opciones de exportación (en Ajustes → Exportar):**
+**Pantalla Exportar (Ajustes, primera sección).** Arriba, dos opciones: "Período" (Solo nuevos / Un mes / Rango de fechas / Todo) y "Cuenta" (oculta si solo hay una). Debajo, el resumen en una línea ("12 gastos · 3 con foto", más "· N eliminados" si hay) y dos botones grandes, cada uno con una línea de explicación: "Exportar para Google Sheets (CSV)" (solo los datos) y "Exportar con fotos (ZIP)" (los datos más las fotos de los recibos, con el peso aproximado). El separador decimal está en "Opciones avanzadas", plegado.
 
-| Opción | Qué incluye | Archivo |
+| Qué exportar | Qué incluye | Archivo |
 | --- | --- | --- |
-| Solo nuevos | Gastos creados o editados desde la última exportación | `gastos_AAAA-MM-DD.csv` |
-| Un mes | Todos los gastos del mes elegido | `gastos_AAAA-MM.csv` |
-| Todo | Todo el historial | `gastos_completo_AAAA-MM-DD.csv` |
-| Con fotos | Cualquiera de las anteriores + carpeta `fotos/` | `.zip` con el CSV y los JPEG |
+| Solo nuevos (por defecto) | Gastos creados o editados después de su `exportadoEn`, más los eliminados desde la última exportación | `gastos_AAAAMMDD-HHMMSS.csv` |
+| Un mes | Todos los gastos del mes elegido | `gastos_AAAA-MM_AAAAMMDD-HHMMSS.csv` |
+| Rango de fechas | De "desde" a "hasta", ambos días completos; "hasta" no puede ser futura ni anterior a "desde" | `gastos_AAAA-MM-DD_a_AAAA-MM-DD_AAAAMMDD-HHMMSS.csv` |
+| Todo | Todo el historial | `gastos_completo_AAAAMMDD-HHMMSS.csv` |
 
-**Formato del CSV**, codificado en UTF-8 con BOM:
+- **Cuenta:** "Todas" (por defecto) o una cuenta específica; se combina con cualquiera de las opciones. Si no es "Todas", su nombre va después de `gastos_` (`gastos_Hogar_2026-10_20261008-201005.csv`, `gastos_Hogar_20261008-201005.zip`).
+- **Formato:** CSV, o ZIP con el CSV en la raíz y los JPEG en `fotos/` (mismo nombre con `.zip`).
+- **Nombre del archivo:** todos terminan en la fecha y hora locales de la exportación (`AAAAMMDD-HHMMSS`), para que dos exportaciones nunca se llamen igual.
+- **Control de lo exportado:** solo "Solo nuevos" marca `exportadoEn` (y vacía los eliminados incluidos). Un mes, un rango y Todo no marcan nada. Si se exporta una sola cuenta, solo se marcan los gastos y eliminados de esa cuenta.
+- **Eliminados:** al borrar en Historial un gasto que ya se había exportado, se guarda en la tabla `eliminados` su `id`, su cuenta y la fecha del borrado. Un gasto que nunca se exportó no deja registro (Sheets no lo conoce). "Deshacer" quita el registro. El registro se escribe al tocar "Eliminar" (en la misma transacción que el borrado) y no al vencer el Deshacer, para que no se pierda si la app se cierra durante esos 5 segundos.
+- **Archivo vacío:** si no hay nada que exportar (por ejemplo "Solo nuevos" dos veces seguidas), la app muestra "No hay gastos nuevos desde la última exportación" y no genera archivo.
+
+**Formato del CSV**, codificado en UTF-8 con BOM y fin de línea CRLF (el ejemplo está en modo "decimal con punto"):
 
 ```csv
-id,fecha,hora,monto,moneda,categoria,cuenta,nota,foto
-3f2a9c1e-5b7d-4e8a-9c21-7d4e5f6a8b90,2026-10-07,13:42,45000,COP,Comida,Personal,Almuerzo con equipo,3f2a9c1e.jpg
-b81d22f0-1c4e-4a7b-8d3f-0e9a6b5c4d21,2026-10-07,18:05,12.5,USD,Compras,Negocio,Suscripción,
+id,fecha,hora,monto,moneda,categoria,cuenta,nota,foto,cambio
+3f2a9c1e-5b7d-4e8a-9c21-7d4e5f6a8b90,2026-10-07,13:42,45000,COP,Comida,Personal,Almuerzo con equipo,3f2a9c1e.jpg,nuevo
+b81d22f0-1c4e-4a7b-8d3f-0e9a6b5c4d21,2026-10-07,18:05,12.5,USD,Compras,Negocio,"Suscripción, anual",,editado
+c07e11aa-92d0-4b6e-b1f4-5a3d8e2c7f10,2026-10-08,09:15,,,,Personal,,,eliminado
 ```
 
-a entre comillas si tiene comas. En Ajustes hay un selector "Decimal con punto / Decimal con coma"; con coma, el separador de columnas pasa a ser punto y coma. Si la hoja de Sheets está configurada en español de Colombia, se usa la opción con coma.
+- `fecha` y `hora` son locales (AAAA-MM-DD y HH:MM). `monto` no lleva separador de miles ni ceros sobrantes: COP sin decimales; USD y EUR hasta 2.
+- `cambio`: `nuevo` (Sheets todavía no lo conoce, o es la versión vigente de un gasto sin cambios que se vuelve a exportar), `editado` (ya se había exportado y cambió después) o `eliminado` (solo trae `id`, `cuenta` y, en `fecha`/`hora`, el momento del borrado; monto, moneda, categoría, nota y foto van vacíos).
+- `foto`: nombre del archivo dentro de `fotos/` del ZIP (los primeros 8 caracteres del `id`, p. ej. `3f2a9c1e.jpg`; si dos chocan, el segundo se alarga); vacía si no hay foto o si se exporta solo CSV.
+- Notas con comas, comillas o saltos de línea van entre comillas (las comillas internas se duplican).
+- Selector en Ajustes → Exportar, "Decimal con punto / Decimal con coma", guardado en `decimalCsv`. **Por defecto, coma**: el decimal es `12,5` y las columnas se separan con punto y coma (`;`), como espera un Sheets en español de Colombia. Con punto, el decimal es `12.5` y las columnas se separan con coma.
 
-**Pasar el archivo a la laptop.** Al exportar se abre el menú Compartir de Android:
+**Pasar el archivo a la laptop.** Al exportar se abre el menú Compartir de Android (Web Share API con archivos):
 
 - Google Drive: guardar en una carpeta "Gastos". Es lo más directo porque Sheets ya está ahí.
 - Quick Share: envío directo a Windows 11 con la app Quick Share para Windows instalada.
 - Gmail o WhatsApp: envío a uno mismo.
-- Si el navegador no permite compartir archivos, el archivo se descarga en la carpeta Descargas.
+- Solo si el menú Compartir se completa se marca `exportadoEn`; si se cancela, no se marca nada. Si Chrome pide un toque nuevo (armar el ZIP tardó), aparece "Archivo listo" con un botón Compartir.
+- El menú Compartir solo se usa en el celular. En Chrome de escritorio (Windows) abre el panel del sistema, que puede quedar oculto y dejar la acción sin respuesta, así que ahí el archivo siempre se descarga. La descarga usa el tipo genérico `application/octet-stream` (el archivo compartido conserva `text/csv` o `application/zip`). Ver "Problemas conocidos" si Windows le agrega `.xls`.
+- Si el navegador no permite compartir archivos (p. ej. `http://<IP-LAN>`), o en el escritorio, el archivo se descarga directamente en la carpeta Descargas y, como no se puede saber si llegó, la marca de "Solo nuevos" se aplica con un aviso "Deshacer marca" de 10 segundos.
+- Tras exportar, el aviso muestra el nombre exacto del archivo (p. ej. "Se descargó gastos_20261008-203734.csv en tu carpeta de descargas"). Ajustes muestra la fecha y hora de la última exportación.
 
-**Importar en Google Sheets.** Crear una vez una hoja "Gastos" con la fila de encabezados. Luego, con cada exportación: Archivo → Importar → elegir el CSV → "Agregar a la hoja actual". La columna `id` permite detectar duplicados con `COUNTIF`. Las fotos del ZIP se suben a la carpeta Drive "Gastos/fotos" y la columna `foto` indica qué archivo corresponde a cada gasto.
+**Importar en Google Sheets.**
+
+*Primera vez.* Crear una hoja de cálculo con una pestaña llamada "Importado". Archivo → Importar → Subir (o elegir el CSV desde Drive) → "Reemplazar hoja actual". Tipo de separador: "Detectar automáticamente" (si las columnas quedan juntas en una sola, elegir "Punto y coma" cuando se exportó con decimal con coma). Dejar activada la conversión de texto a números y fechas.
+
+*Actualizaciones.* Archivo → Importar → elegir el nuevo CSV → "Agregar a la hoja actual". Las filas nuevas quedan debajo de las anteriores, así que un mismo `id` puede aparecer varias veces (un gasto editado, o uno eliminado). Para quedarse con la última versión de cada `id` y descartar los eliminados, en una pestaña nueva ("Gastos") se escribe en A1, con el encabezado y los datos de "Importado" en A:J (con Sheets en español, los argumentos se separan con `;` y no con `,`):
+
+```
+=QUERY(SORTN(SORT({Importado!A2:J, ROW(Importado!A2:A)}, 11, FALSE), 9^9, 2, 1, TRUE), "select Col1,Col2,Col3,Col4,Col5,Col6,Col7,Col8,Col9,Col10 where Col10 <> 'eliminado' order by Col2, Col3", 0)
+```
+
+`SORT(..., 11, FALSE)` ordena de la fila más reciente a la más antigua (la columna 11 agregada es el número de fila); `SORTN(..., 9^9, 2, 1, TRUE)` conserva solo la primera fila de cada `id` (columna 1), es decir, la última versión importada; y `QUERY` descarta las que dicen `eliminado`. Los encabezados se escriben a mano en la fila 1 de "Gastos" y la fórmula va en A2. Las fotos del ZIP se suben a la carpeta Drive "Gastos/fotos" y la columna `foto` indica qué archivo corresponde a cada gasto. La conversión de divisas se hace sobre "Gastos" con `GOOGLEFINANCE("CURRENCY:USDCOP")`.
+
 
 **Respaldo y restauración.** "Crear respaldo" genera `respaldo_gastos_AAAA-MM-DD.json` con gastos, cuentas, categorías, ajustes y fotos en base64. "Restaurar" lo lee y fusiona por `id` sin duplicar. Si pasan más de 7 días sin respaldo, la pantalla Registrar muestra un aviso discreto.
 
@@ -157,11 +185,15 @@ Cada fase termina con algo que se puede probar en el celular; Claude Code debe h
    - [ ] Cada foto guardada pesa menos de 500 KB, salvo cuando no se pueda sin bajar de calidad 0,6 o de 900 px de lado corto; en ese caso se guarda igual.
 6. **Exportación.** CSV y ZIP, menú Compartir, "Solo nuevos".
    - [ ] El CSV se importa en Google Sheets con fechas y montos reconocidos como tales.
-   - [ ] Exportar "Solo nuevos" dos veces seguidas genera un segundo archivo vacío.
+   - [ ] Exportar "Solo nuevos" dos veces seguidas no genera un segundo archivo: avisa "No hay gastos nuevos desde la última exportación".
 7. **Respaldo, resumen y ajustes.** Respaldo JSON, restauración con fusión, pantalla Resumen, gestión de categorías.
    - [ ] Restaurar un respaldo en un navegador limpio recupera gastos y fotos.
 
 Pruebas: Vitest para la lógica (formato de montos, generación de CSV, fusión de respaldos) y una lista de verificación manual en el celular al cerrar cada fase.
+
+## Problemas conocidos
+
+- **El CSV se descarga como `gastos_….csv.xls` en Windows.** Pasa cuando Chrome tiene activado "Preguntar dónde guardar cada archivo antes de descargar" (`chrome://settings/downloads`) y Excel está instalado: la descarga pasa por el cuadro "Guardar como" de Windows, que toma la extensión del tipo asociado a `.csv` en el registro (`HKCR\.csv` → `application/vnd.ms-excel` → `.xls`) y la agrega al nombre. Excel avisa entonces que el formato y la extensión no coinciden. Solución: desactivar ese ajuste de Chrome (la descarga directa conserva el nombre exacto) o renombrar el archivo quitando `.xls`. Probado: `showSaveFilePicker` usa el mismo cuadro y no lo evita, por eso la app no lo usa.
 
 ## Cómo probar antes de instalar
 

@@ -812,3 +812,180 @@ button {
   text-shadow: 0 1px 3px #000;
   pointer-events: none;
 }
+
+/* ---------- Fase 6: exportación ---------- */
+.opciones-2 {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.campos-fecha {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.campo-fecha {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.exportar-resumen,
+.exportar-resultado {
+  margin: 0;
+  font-weight: 700;
+}
+
+.exportar-resultado:empty,
+.exportar-resumen:empty {
+  display: none;
+}
+
+.exportar-progreso {
+  width: 100%;
+  height: 16px;
+}
+
+/* ---------- Ajustes plegables ---------- */
+.acordeon {
+  display: grid;
+  gap: 8px;
+}
+
+.acordeon-cabecera {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 64px;
+  padding: 0 18px;
+  border-radius: 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  font-size: 1.2rem;
+  font-weight: 700;
+  text-align: left;
+}
+
+.acordeon-cabecera[aria-expanded='true'] {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.acordeon-mas {
+  text-align: left;
+  padding: 0 18px;
+  font-size: 1.05rem;
+}
+
+/* ---------- Hoja "Editar gasto" ---------- */
+.hoja-lista {
+  z-index: 12;
+}
+
+.edit-seccion {
+  display: grid;
+  gap: 6px;
+}
+
+.edit-titulo {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.edit-monto {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px;
+  min-height: 72px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+}
+
+.edit-monto-input {
+  flex: 1;
+  min-width: 0;
+  min-height: 64px;
+  border: 0;
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  font-size: 2rem;
+  font-weight: 700;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.chip-grande {
+  min-height: 64px;
+  border-radius: 14px;
+  font-size: 1.1rem;
+  justify-self: start;
+}
+
+.edit-categorias {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.edit-cat {
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 2px;
+  min-height: 72px;
+  padding: 6px 2px;
+  border-radius: 14px;
+  background: var(--surface-2);
+  border: 3px solid transparent;
+}
+
+.edit-cat-emoji {
+  font-size: 1.6rem;
+}
+
+.edit-cat-nombre {
+  font-size: 0.85rem;
+}
+
+.edit-cat[aria-pressed='true'] {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: var(--fg);
+  font-weight: 700;
+}
+
+.foto-acciones {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.foto-acciones-una {
+  grid-template-columns: 1fr;
+}
+
+.hoja-panel {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.edit-seccion,
+.campos-fecha > *,
+.edit-categorias > * {
+  min-width: 0;
+}
+
+.edit-seccion {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.edit-monto-input {
+  width: 100%;
+}

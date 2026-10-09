@@ -1,4 +1,10 @@
-import { db, guardarEdicionConFoto, repoAjustes } from '../db';
+import {
+  db,
+  eliminarGastoRegistrando,
+  guardarEdicionConFoto,
+  repoAjustes,
+  restaurarGastoEliminado,
+} from '../db';
 import { generarUuid, mensajeDeError } from '../lib/compat';
 import { cuentasActivas, etiquetaCuenta, ordenadas } from '../lib/cuentas';
 import {
@@ -19,8 +25,8 @@ import {
   type BorradoPendiente,
   type TotalMoneda,
 } from '../lib/historial';
-import { decimalsFor, formatMonto, montoParaCampo } from '../lib/money';
-import { cargarConfigMonedas } from '../lib/monedas';
+import { decimalsFor, formatMonto, montoParaCampo, simboloMoneda } from '../lib/money';
+import { CATALOGO_MONEDAS, cargarConfigMonedas } from '../lib/monedas';
 import { MAX_NOTA } from '../lib/nota';
 import type { Categoria, Cuenta, Foto, Gasto } from '../types';
 import { mostrarError } from './avisos';
@@ -105,12 +111,20 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
   hoja.hidden = true;
   const panel = el('div', 'hoja-panel hoja-editar');
   hoja.append(panel);
+  // Segunda hoja, encima de la de edición: listas de moneda, cuenta y origen de la foto.
+  const lista2 = el('div', 'hoja hoja-lista');
+  lista2.hidden = true;
+  const lista2Panel = el('div', 'hoja-panel');
+  lista2.append(lista2Panel);
+  lista2.addEventListener('click', (e) => {
+    if (e.target === lista2) lista2.hidden = true;
+  });
 
   // Selector de archivos compartido por la hoja de edición (cámara y galería).
   let alElegirFoto: ((archivo: File) => void) | null = null;
   const selector = crearSelectorFoto((f) => alElegirFoto?.(f));
 
-  root.append(filtros, lista, toast, hoja, selector.el);
+  root.append(filtros, lista, toast, hoja, lista2, selector.el);
 
   function liberarMiniaturas(): void {
     for (const u of urlsMiniaturas) URL.revokeObjectURL(u);
@@ -321,44 +335,128 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
     let abierta = true;
 
     const titulo = el('h2', 'hoja-titulo', 'Editar gasto');
+    const seccion = (nombre: string, ...hijos: HTMLElement[]): HTMLElement => {
+      const s = el('div', 'edit-seccion');
+      s.append(el('p', 'edit-titulo', nombre), ...hijos);
+      return s;
+    };
 
-    const campos = el('div', 'campos');
-    const iFecha = el('input');
-    iFecha.type = 'date';
-    iFecha.max = dateKey(new Date());
-    iFecha.value = fecha;
-    iFecha.setAttribute('aria-label', 'Fecha');
-    const iHora = el('input');
-    iHora.type = 'time';
-    iHora.value = hora;
-    iHora.setAttribute('aria-label', 'Hora');
-    const iMonto = el('input');
+    // ---- Monto (con el símbolo de su moneda, como en Registrar) ----
+    const simbolo = el('span', 'monto-simbolo', simboloMoneda(moneda));
+    const iMonto = el('input', 'edit-monto-input');
     iMonto.type = 'text';
     iMonto.inputMode = 'decimal';
     iMonto.autocomplete = 'off';
     iMonto.value = g.monto.toFixed(decimalsFor(g.moneda));
     iMonto.setAttribute('aria-label', `Monto en ${g.moneda}`);
     cerrarTecladoConEnter(iMonto);
-    campos.append(iMonto, iFecha, iHora);
+    const filaMonto = el('div', 'edit-monto');
+    filaMonto.append(simbolo, iMonto);
 
+    // ---- Fecha y hora ----
+    const iFecha = el('input', 'nota-input');
+    iFecha.type = 'date';
+    iFecha.max = dateKey(new Date());
+    iFecha.value = fecha;
+    iFecha.setAttribute('aria-label', 'Fecha');
+    const iHora = el('input', 'nota-input');
+    iHora.type = 'time';
+    iHora.value = hora;
+    iHora.setAttribute('aria-label', 'Hora');
+    const filaFecha = el('div', 'campos-fecha');
+    filaFecha.append(iFecha, iHora);
+
+    // ---- Listas que se abren desde un chip (moneda, cuenta, origen de la foto) ----
+    function abrirLista(nombre: string, opciones: { texto: string; activa?: boolean; alElegir: () => void }[]): void {
+      const botones = opciones.map((o) => {
+        const b = el('button', 'hoja-op', o.texto);
+        b.type = 'button';
+        b.classList.toggle('activa', o.activa === true);
+        b.addEventListener('click', () => {
+          lista2.hidden = true;
+          o.alElegir();
+        });
+        return b;
+      });
+      const cerrar = el('button', 'hoja-op hoja-cerrar', 'Cancelar');
+      cerrar.type = 'button';
+      cerrar.addEventListener('click', () => (lista2.hidden = true));
+      lista2Panel.replaceChildren(el('h2', 'hoja-titulo', nombre), ...botones, cerrar);
+      lista2.hidden = false;
+      lista2Panel.scrollTop = 0;
+    }
+
+    // ---- Moneda ----
     // Monedas visibles; la del gasto siempre aparece aunque se haya ocultado después.
     const codigos = monedasVisibles.includes(g.moneda) ? monedasVisibles : [g.moneda, ...monedasVisibles];
-    const monedas = el('div', 'moneda-selector');
-    const botonesMoneda = codigos.map((codigo) => {
-      const b = el('button', 'cat-op', codigo);
+    const nombresMoneda = new Map(CATALOGO_MONEDAS.map((m) => [m.codigo, m.nombre]));
+    const chipMoneda = el('button', 'chip chip-grande');
+    chipMoneda.type = 'button';
+    const pintarChipMoneda = (): void => {
+      chipMoneda.textContent = `💱 ${moneda} ▾`;
+      chipMoneda.setAttribute('aria-label', `Moneda: ${moneda}. Tocar para cambiar`);
+    };
+    pintarChipMoneda();
+    chipMoneda.addEventListener('click', () =>
+      abrirLista(
+        'Moneda',
+        codigos.map((codigo) => ({
+          texto: `${codigo} · ${nombresMoneda.get(codigo) ?? codigo}`,
+          activa: codigo === moneda,
+          alElegir: () => {
+            moneda = codigo;
+            pintarChipMoneda();
+            simbolo.textContent = simboloMoneda(moneda);
+            iMonto.setAttribute('aria-label', `Monto en ${moneda}`);
+            // Reformatea el monto (12.00 ↔ 12); si perdería decimales, queda igual y Guardar lo señala.
+            iMonto.value = montoParaCampo(iMonto.value, moneda);
+          },
+        })),
+      ),
+    );
+
+    // ---- Cuenta: activas, más la del gasto aunque esté archivada. Con una sola opción no se muestra. ----
+    const opcionesCuenta = ordenadas(cuentas).filter((c) => !c.archivada || c.id === g.cuentaId);
+    const chipCuenta = el('button', 'chip chip-grande');
+    chipCuenta.type = 'button';
+    const pintarChipCuenta = (): void => {
+      const c = cuentas.find((x) => x.id === cuentaId);
+      chipCuenta.textContent = `${c ? etiquetaCuenta(c) : '📒 Cuenta'} ▾`;
+      chipCuenta.setAttribute('aria-label', `Cuenta: ${c?.nombre ?? 'sin cuenta'}. Tocar para cambiar`);
+    };
+    pintarChipCuenta();
+    chipCuenta.addEventListener('click', () =>
+      abrirLista(
+        'Cuenta',
+        opcionesCuenta.map((c) => ({
+          texto: `${etiquetaCuenta(c)}${c.archivada ? ' (archivada)' : ''}`,
+          activa: c.id === cuentaId,
+          alElegir: () => {
+            cuentaId = c.id;
+            pintarChipCuenta();
+          },
+        })),
+      ),
+    );
+    const seccionCuenta = seccion('Cuenta', chipCuenta);
+    seccionCuenta.hidden = opcionesCuenta.length <= 1;
+
+    // ---- Categoría: cuadrícula con emoji; la elegida se resalta ----
+    const cuadricula = el('div', 'edit-categorias');
+    const botonesCat = categorias.map((c) => {
+      const b = el('button', 'edit-cat');
       b.type = 'button';
-      b.setAttribute('aria-pressed', String(codigo === moneda));
+      b.append(el('span', 'edit-cat-emoji', c.emoji), el('span', 'edit-cat-nombre', c.nombre));
+      b.setAttribute('aria-pressed', String(c.id === categoriaId));
       b.addEventListener('click', () => {
-        moneda = codigo;
-        for (const o of botonesMoneda) o.setAttribute('aria-pressed', String(o === b));
-        iMonto.setAttribute('aria-label', `Monto en ${moneda}`);
-        // Reformatea el monto (12.00 ↔ 12); si perdería decimales, queda igual y Guardar lo señala.
-        iMonto.value = montoParaCampo(iMonto.value, moneda);
+        categoriaId = c.id;
+        for (const o of botonesCat) o.setAttribute('aria-pressed', String(o === b));
       });
       return b;
     });
-    monedas.append(...botonesMoneda);
+    cuadricula.append(...botonesCat);
 
+    // ---- Nota ----
     const iNota = el('input', 'nota-input');
     iNota.type = 'text';
     iNota.maxLength = MAX_NOTA;
@@ -368,8 +466,8 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
     iNota.setAttribute('aria-label', 'Nota');
     cerrarTecladoConEnter(iNota);
 
-    // ---- Foto del recibo ----
-    const seccionFoto = el('div', 'foto-seccion');
+    // ---- Foto del recibo: miniatura con Ver / Reemplazar / Quitar, o un solo "Agregar foto" ----
+    const cuerpoFoto = el('div', 'foto-seccion');
     const liberarUrlsEdicion = (): void => {
       for (const u of urlsEdicion) URL.revokeObjectURL(u);
       urlsEdicion = [];
@@ -379,6 +477,11 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
       if (cambioFoto.tipo === 'quitar') return null;
       return fotoActual;
     }
+    const elegirOrigenFoto = (): void =>
+      abrirLista('Foto del recibo', [
+        { texto: '📸 Tomar foto', alElegir: () => selector.tomar() },
+        { texto: '🖼️ Elegir de la galería', alElegir: () => selector.galeria() },
+      ]);
     function pintarFotoEdicion(): void {
       liberarUrlsEdicion();
       const v = fotoVigente();
@@ -408,29 +511,28 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
         b.addEventListener('click', alTocar);
         return b;
       };
-      const botones = el('div', 'cat-selector');
+      const acciones = el('div', v ? 'foto-acciones' : 'foto-acciones foto-acciones-una');
       if (v) {
-        botones.append(
+        acciones.append(
           boton('🔍 Ver', () => abrirVisor(v.blob, v.ancho, v.alto, v.diag)),
-          boton('📸 Reemplazar', () => selector.tomar()),
-          boton('🖼️ Galería', () => selector.galeria()),
+          boton('🔄 Reemplazar', elegirOrigenFoto),
           boton('🗑️ Quitar', () => {
             cambioFoto = g.fotoId ? { tipo: 'quitar' } : { tipo: 'ninguno' };
             pintarFotoEdicion();
           }),
         );
       } else {
-        botones.append(boton('📸 Tomar foto', () => selector.tomar()), boton('🖼️ Galería', () => selector.galeria()));
+        acciones.append(boton('📷 Agregar foto', elegirOrigenFoto));
         if (cambioFoto.tipo === 'quitar') {
-          botones.append(
-            boton('↩️ Conservar', () => {
+          acciones.append(
+            boton('↩️ Conservar la foto', () => {
               cambioFoto = { tipo: 'ninguno' };
               pintarFotoEdicion();
             }),
           );
         }
       }
-      seccionFoto.replaceChildren(fila, botones);
+      cuerpoFoto.replaceChildren(fila, acciones);
     }
     alElegirFoto = (archivo) => {
       procesandoFoto = true;
@@ -462,37 +564,9 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
     limpiarEdicion = () => {
       abierta = false;
       alElegirFoto = null;
+      lista2.hidden = true;
       liberarUrlsEdicion();
     };
-
-    const cats = el('div', 'cat-selector');
-    const botonesCat = categorias.map((c) => {
-      const b = el('button', 'cat-op', `${c.emoji} ${c.nombre}`);
-      b.type = 'button';
-      b.setAttribute('aria-pressed', String(c.id === categoriaId));
-      b.addEventListener('click', () => {
-        categoriaId = c.id;
-        for (const o of botonesCat) o.setAttribute('aria-pressed', String(o === b));
-      });
-      return b;
-    });
-    cats.append(...botonesCat);
-
-    // Activas; la cuenta del gasto siempre aparece aunque esté archivada. Con una sola cuenta no se muestra.
-    const opciones = ordenadas(cuentas).filter((c) => !c.archivada || c.id === g.cuentaId);
-    const selectorCuenta = el('div', 'cat-selector');
-    const botonesCuenta = opciones.map((c) => {
-      const b = el('button', 'cat-op', etiquetaCuenta(c));
-      b.type = 'button';
-      b.setAttribute('aria-pressed', String(c.id === cuentaId));
-      b.addEventListener('click', () => {
-        cuentaId = c.id;
-        for (const o of botonesCuenta) o.setAttribute('aria-pressed', String(o === b));
-      });
-      return b;
-    });
-    selectorCuenta.append(...botonesCuenta);
-    selectorCuenta.hidden = cuentas.length <= 1;
 
     const error = el('p', 'hoja-error');
     error.setAttribute('role', 'alert');
@@ -552,14 +626,28 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
     const pie = el('div', 'hoja-pie');
     pie.append(error, guardar);
 
-    panel.replaceChildren(titulo, campos, monedas, iNota, seccionFoto, selectorCuenta, cats, pie, borrar, cancelar);
+    // "Eliminar gasto" va al final, después de Cancelar, para no tocarlo por error.
+    panel.replaceChildren(
+      titulo,
+      seccion('Monto', filaMonto),
+      seccion('Fecha y hora', filaFecha),
+      seccion('Categoría', cuadricula),
+      seccionCuenta,
+      seccion('Moneda', chipMoneda),
+      seccion('Nota', iNota),
+      seccion('Foto', cuerpoFoto),
+      pie,
+      cancelar,
+      borrar,
+    );
     hoja.hidden = false;
     panel.scrollTop = 0;
   }
 
   const repoBorrado = {
-    add: async (x: Gasto): Promise<void> => void (await db.gastos.add(x)),
-    delete: (id: string): Promise<void> => db.gastos.delete(id),
+    // Si el gasto ya se había exportado, al borrarlo queda el registro para avisar a Sheets.
+    add: (x: Gasto): Promise<void> => restaurarGastoEliminado(x),
+    delete: (id: string): Promise<void> => eliminarGastoRegistrando(id),
     borrarFoto: (id: string): Promise<void> => db.fotos.delete(id),
   };
 
