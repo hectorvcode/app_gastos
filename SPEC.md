@@ -60,13 +60,13 @@ Seis tablas en IndexedDB; las fotos van aparte para que listar gastos sea rápid
 
 **fotos**: id, blob (JPEG comprimido), ancho, alto.
 
-**categorias**: id, nombre, emoji, orden, activa. Precargadas: Comida, Mercado, Transporte, Hogar, Salud, Ocio, Compras, Servicios, Otros. El usuario puede renombrar, reordenar y ocultar.
+**categorias**: id, nombre, emoji, orden, activa. Precargadas: Comida, Mercado, Transporte, Hogar, Salud, Ocio, Compras, Servicios, Otros. Es **un solo catálogo común a todas las cuentas**: crear, renombrar, cambiar el emoji, ocultar (`activa` = false) y borrar afectan a todas. Cada cuenta decide cuáles muestra y en qué orden (ver "Categorías por cuenta"). Un gasto conserva su `categoriaId` aunque la categoría esté oculta.
 
-**cuentas**: id, nombre, emoji, orden, archivada. Una cuenta es un libro separado de gastos (Personal, Hogar, Negocio…): solo una etiqueta para registrar y consultar por separado, sin saldo, ingresos, transferencias ni moneda propia. Al iniciar por primera vez se crea "Personal". Una cuenta con gastos no se borra, solo se archiva; siempre queda al menos una cuenta activa y la predeterminada no se puede archivar.
+**cuentas**: id, nombre, emoji, orden, archivada, categoriaIds (desde la Fase 7a: lista ordenada de ids de las categorías que la cuenta muestra en Registrar). Una cuenta es un libro separado de gastos (Personal, Hogar, Negocio…): solo una etiqueta para registrar y consultar por separado, sin saldo, ingresos, transferencias ni moneda propia. Al iniciar por primera vez se crea "Personal". Una cuenta con gastos no se borra, solo se archiva; siempre queda al menos una cuenta activa y la predeterminada no se puede archivar.
 
 **eliminados**: id (del gasto), cuentaId, eliminadoEn (ISO). Gastos borrados que ya se habían exportado; se vacía lo incluido en cada exportación "Solo nuevos". Se agrega en la Fase 6 (migración de Dexie a versionEsquema 3, que solo añade la tabla).
 
-**ajustes** (clave-valor): monedaPredeterminada (COP), monedasVisibles (COP, USD, EUR), cuentaPredeterminada (id de cuenta), ultimaCuenta (última cuenta usada en Registrar), ultimaExportacion (ISO de la última exportación completada), decimalCsv (`coma` por defecto o `punto`), versionEsquema (3 desde la Fase 6).
+**ajustes** (clave-valor): monedaPredeterminada (COP), monedasVisibles (COP, USD, EUR), cuentaPredeterminada (id de cuenta), ultimaCuenta (última cuenta usada en Registrar), ultimaExportacion (ISO de la última exportación completada), decimalCsv (`coma` por defecto o `punto`), versionEsquema (3 desde la Fase 6, 4 desde la Fase 7a).
 
 No hay conversión de divisas en la app: cada gasto guarda su monto en la moneda original. La conversión se hace en Google Sheets con `GOOGLEFINANCE("CURRENCY:USDCOP")`.
 
@@ -95,10 +95,29 @@ Pantallas (barra inferior con 4 pestañas):
 
 | Pantalla | Qué muestra | Acciones |
 | --- | --- | --- |
-| Registrar | Monto grande, chips de fecha, moneda y cuenta, cámara, nota, teclado y cuadrícula de categorías (3 columnas, botones de mínimo 64 px) | Guardar con un toque, deshacer |
+| Registrar | Monto grande, chips de fecha, moneda y cuenta, cámara, nota, teclado y cuadrícula con las categorías visibles de la cuenta actual (3 columnas, hasta 4 filas, botones de mínimo 64 px, sin scroll) | Guardar con un toque, deshacer |
 | Historial | Gastos agrupados por día, del más reciente al más antiguo, con miniatura si hay foto | Tocar para editar, borrar o ver la foto; filtrar por mes, categoría y cuenta |
 | Resumen | Total del mes por moneda y por categoría, con barras horizontales simples | Cambiar de mes |
-| Ajustes | Categorías, monedas, estado del almacenamiento, exportar, respaldar y restaurar | Ver sección de exportación |
+| Ajustes | Secciones plegables: Exportar, Categorías, Cuentas, Monedas y Fotos; el estado del almacenamiento, el respaldo y la restauración llegan en la Fase 7b | Ver sección de exportación |
+
+**Categorías por cuenta (Fase 7a).** Ajustes → "Categorías" (plegable, entre Exportar y Cuentas):
+
+- Con más de una cuenta activa, arriba hay un selector "Categorías de: <cuenta>" que empieza en la cuenta actual de Registrar. Para esa cuenta se muestra u oculta cada categoría y se reordena con subir/bajar. Cada categoría indica cuántos gastos tiene en total.
+- Las acciones del catálogo (crear, renombrar, cambiar emoji, ocultar del catálogo, borrar) están en la hoja de cada categoría, con el aviso "Afecta a todas las cuentas".
+- **Reglas:** máximo 12 categorías visibles por cuenta (3 columnas × 4 filas caben en Registrar sin scroll; si se intenta pasar de 12, un aviso lo explica) y al menos 1. Nombres únicos sin distinguir mayúsculas (también frente a las ocultas), hasta 20 caracteres; emoji vacío → 🏷️.
+- **Ocultar o borrar:** una categoría con gastos no se borra, solo se oculta del catálogo y entonces desaparece de todas las cuentas (se puede volver a mostrar; vuelve visible solo en la cuenta que se está editando, si hay cupo). Una categoría sin gastos sí se borra y sale de todas las cuentas. No se puede ocultar ni borrar una categoría si alguna cuenta se quedaría sin ninguna.
+- **Dos formas de ocultar, con textos distintos:** el interruptor de la lista dice "Visible en <cuenta>" / "Oculta en <cuenta>" y afecta solo a esa cuenta; el botón de la hoja de la categoría dice "Ocultar en todas las cuentas" (catálogo). Ambas actúan sin confirmación previa y muestran un aviso con "Deshacer" (8 s): "Mercado ya no aparece en Hogar" o "Mercado se ocultó en todas las cuentas. Sus N gastos siguen en Historial". Deshacer devuelve la visibilidad y el orden de cada cuenta afectada exactamente como estaban.
+- **Categoría nueva:** se agrega visible, al final, a la cuenta seleccionada (si tiene menos de 12) y queda oculta en las demás.
+- **Cuentas nuevas** empiezan con todas las categorías activas (hasta 12), en el orden del catálogo.
+- **Migración (Dexie versionEsquema 4):** cada cuenta existente recibe todas las categorías activas actuales en su orden actual. No cambia ni pierde gastos; si falla, la base queda en la versión 3.
+- **Renombrar o cambiar el emoji no actualiza `editadoEn`** de los gastos (el nombre no se guarda en ellos): no vuelven a salir en "Solo nuevos". La exportación usa siempre el nombre actual. **En Google Sheets, las filas ya importadas conservan el nombre anterior** hasta que ese gasto se vuelva a exportar (para unificarlos: exportar "Todo" y agregarlo a "Importados"; la fórmula se queda con la última versión de cada `id`).
+- **Historial y edición:** los gastos se ven con su categoría aunque esté oculta en la cuenta o en el catálogo. "Editar gasto" ofrece las categorías visibles de la cuenta del gasto, más la categoría actual del gasto si no está entre ellas (marcada "oculta aquí"); al cambiar la cuenta del gasto la categoría se conserva, aunque la nueva cuenta no la muestre. El filtro de categoría de Historial lista todo el catálogo: con "Todas las cuentas" marca "(oculta)" si está oculta del catálogo o ninguna cuenta activa la muestra; "(oculta en Hogar)", "(oculta en Hogar y Negocio)" o "(oculta en 3 cuentas)" si solo falta en algunas cuentas activas; sin marca si todas las activas la muestran. Con una cuenta específica: "(oculta en <cuenta>)" si esa cuenta no la muestra. Da igual si se ocultó con el interruptor de una cuenta o con "Ocultar en todas las cuentas". "Editar gasto" usa el criterio de cuenta específica con la cuenta elegida en la hoja.
+
+**Navegación hacia atrás (Fase 7a).** Las pantallas principales son Registrar, Historial, Resumen y Ajustes. Toda hoja o pantalla secundaria (Editar gasto, Nota, Foto, selectores de fecha, moneda y cuenta, visor de fotos, "Archivo listo", hojas de cuenta y de categoría, cuadros de confirmación) cumple:
+
+- Arriba lleva un botón "← Atrás" de al menos 48 px (fijo al desplazar la hoja).
+- El botón o gesto Atrás de Android, también en la app instalada, cierra la hoja abierta en lugar de salir de la app: se usa la History API (`pushState` al abrir, `popstate` al cerrar), que funciona también sin HTTPS. Con hojas anidadas se cierra solo la de arriba. En una pantalla principal sin hojas abiertas, Atrás se comporta como siempre. La lógica está en `lib/navegacion.ts` (`PilaNavegacion`).
+- Si la hoja tiene cambios sin guardar (p. ej. Editar gasto), Atrás —el botón de la pantalla, el de Android y "Cancelar"— pregunta "¿Descartar cambios?" antes de cerrar. Cerrar por código (tras guardar o eliminar) no pregunta. En "Archivo listo", Atrás pregunta "¿Descartar el archivo preparado?" (Descartar archivo / Conservarlo). Si la página se recarga con una hoja abierta, al iniciar la app vuelve a la base del historial (cada entrada guarda `n`, cuántas hay sobre la base), para que ningún Atrás quede sin efecto visible.
 
 Reglas de interfaz: tema claro y oscuro según el sistema, textos en español, formato de fecha `dd/mm/aaaa`, todo usable con una sola mano. Si el monto es 0, tocar una categoría no guarda nada y el monto vibra.
 
@@ -148,19 +167,24 @@ c07e11aa-92d0-4b6e-b1f4-5a3d8e2c7f10,2026-10-08,09:15,,,,Personal,,,eliminado
 - **Registro de diagnóstico:** cada paso de la exportación (armado, `canShare`, `share`, descarga) se anota en la consola (`[exportar]`, visible con `chrome://inspect`) y en Ajustes → Exportar → Opciones avanzadas → "Registro de la última exportación".
 - El menú Compartir solo se usa en el celular. En Chrome de escritorio (Windows) abre el panel del sistema, que puede quedar oculto y dejar la acción sin respuesta, así que ahí el archivo siempre se descarga. La descarga usa el tipo genérico `application/octet-stream` (el archivo compartido conserva `text/csv` o `application/zip`). Ver "Problemas conocidos" si Windows le agrega `.xls`.
 - Si el navegador no permite compartir archivos (p. ej. `http://<IP-LAN>`), o en el escritorio, el archivo se descarga directamente en la carpeta Descargas y, como no se puede saber si llegó, la marca de "Solo nuevos" se aplica con un aviso "Deshacer marca" de 10 segundos.
-- Tras exportar, el aviso muestra el nombre exacto del archivo (p. ej. "Se descargó gastos_20261008-203734.csv en tu carpeta de descargas"). Ajustes muestra la fecha y hora de la última exportación.
+- Tras exportar, el aviso muestra el nombre exacto del archivo. En escritorio: "Se descargó gastos_20261008-203734.csv en tu carpeta de descargas". En el celular (Android no muestra la notificación de la descarga): "Se guardó <nombre> en Archivos → Descargas. Para subirlo a Drive: abre Files, mantén presionado el archivo → Compartir → Drive." Ajustes muestra la fecha y hora de la última exportación.
 
 **Importar en Google Sheets.**
 
-*Primera vez.* Crear una hoja de cálculo con una pestaña llamada "Importado". Archivo → Importar → Subir (o elegir el CSV desde Drive) → "Reemplazar hoja actual". Tipo de separador: "Detectar automáticamente" (si las columnas quedan juntas en una sola, elegir "Punto y coma" cuando se exportó con decimal con coma). Dejar activada la conversión de texto a números y fechas.
+*Primera vez.* Crear una hoja de cálculo con una pestaña llamada **"Importados"**, donde se acumulan todos los CSV. Archivo → Importar → Subir (o elegir el CSV desde Drive) → "Reemplazar hoja actual". Tipo de separador: "Detectar automáticamente" (si las columnas quedan juntas en una sola, elegir "Punto y coma" cuando se exportó con decimal con coma). Dejar activada la conversión de texto a números y fechas.
 
-*Actualizaciones.* Archivo → Importar → elegir el nuevo CSV → "Agregar a la hoja actual". Las filas nuevas quedan debajo de las anteriores, así que un mismo `id` puede aparecer varias veces (un gasto editado, o uno eliminado). Para quedarse con la última versión de cada `id` y descartar los eliminados, en una pestaña nueva ("Gastos") se escribe en A1, con el encabezado y los datos de "Importado" en A:J (con Sheets en español, los argumentos se separan con `;` y no con `,`):
+*Actualizaciones.* Archivo → Importar → elegir el nuevo CSV → **"Agregar a la hoja actual"** (con "Importados" abierta). Las filas nuevas quedan debajo de las anteriores, así que un mismo `id` puede aparecer varias veces (un gasto editado, o uno eliminado), y cada importación vuelve a traer la fila de encabezados.
+
+*Pestaña "Gastos".* Es la que se consulta: muestra la última versión de cada `id` y descarta los eliminados. Se crea una pestaña nueva llamada "Gastos" con dos celdas (fórmula probada en una hoja real de Sheets en español de Colombia, donde los argumentos se separan con `;` y no con `,`):
+
+- En **A1**: `=Importados!A1:J1` (copia los encabezados).
+- En **A2**:
 
 ```
-=QUERY(SORTN(SORT({Importado!A2:J, ROW(Importado!A2:A)}, 11, FALSE), 9^9, 2, 1, TRUE), "select Col1,Col2,Col3,Col4,Col5,Col6,Col7,Col8,Col9,Col10 where Col10 <> 'eliminado' order by Col2, Col3", 0)
+=LET(datos; FILTER(Importados!A2:J; Importados!A2:A<>""; Importados!A2:A<>"id"); ultimos; SORTN(SORT(datos; SEQUENCE(ROWS(datos)); FALSE); 9^9; 2; 1; TRUE); vivos; FILTER(ultimos; INDEX(ultimos; 0; 10)<>"eliminado"); SORT(vivos; 2; FALSE; 3; FALSE))
 ```
 
-`SORT(..., 11, FALSE)` ordena de la fila más reciente a la más antigua (la columna 11 agregada es el número de fila); `SORTN(..., 9^9, 2, 1, TRUE)` conserva solo la primera fila de cada `id` (columna 1), es decir, la última versión importada; y `QUERY` descarta las que dicen `eliminado`. Los encabezados se escriben a mano en la fila 1 de "Gastos" y la fórmula va en A2. Las fotos del ZIP se suben a la carpeta Drive "Gastos/fotos" y la columna `foto` indica qué archivo corresponde a cada gasto. La conversión de divisas se hace sobre "Gastos" con `GOOGLEFINANCE("CURRENCY:USDCOP")`.
+Cómo funciona: `datos` son las filas de "Importados" sin las vacías ni los encabezados repetidos (`id`); `SORT(...; SEQUENCE(ROWS(datos)); FALSE)` las ordena de la fila más reciente a la más antigua; `SORTN(...; 9^9; 2; 1; TRUE)` conserva solo la primera fila de cada `id` (columna 1), es decir, la última versión importada; `vivos` descarta las que dicen `eliminado` (columna 10); y el `SORT` final deja los gastos del más reciente al más antiguo (fecha y luego hora). Las fotos del ZIP se suben a la carpeta Drive "Gastos/fotos" y la columna `foto` indica qué archivo corresponde a cada gasto. La conversión de divisas se hace sobre "Gastos" con `GOOGLEFINANCE("CURRENCY:USDCOP")`.
 
 
 **Respaldo y restauración.** "Crear respaldo" genera `respaldo_gastos_AAAA-MM-DD.json` con gastos, cuentas, categorías, ajustes y fotos en base64. "Restaurar" lo lee y fusiona por `id` sin duplicar. Si pasan más de 7 días sin respaldo, la pantalla Registrar muestra un aviso discreto.
@@ -189,8 +213,13 @@ Cada fase termina con algo que se puede probar en el celular; Claude Code debe h
 6. **Exportación.** CSV y ZIP, menú Compartir, "Solo nuevos".
    - [ ] El CSV se importa en Google Sheets con fechas y montos reconocidos como tales.
    - [ ] Exportar "Solo nuevos" dos veces seguidas no genera un segundo archivo: avisa "No hay gastos nuevos desde la última exportación".
-7. **Respaldo, resumen y ajustes.** Respaldo JSON, restauración con fusión, pantalla Resumen, gestión de categorías.
-   - [ ] Restaurar un respaldo en un navegador limpio recupera gastos y fotos.
+7. **Categorías, navegación, respaldo y resumen.** Se divide en dos entregas:
+   - **7a. Categorías editables por cuenta, navegación hacia atrás y pendientes.** Catálogo único de categorías con visibilidad y orden por cuenta (migración de Dexie a versionEsquema 4), sección "Categorías" en Ajustes, cuadrícula de Registrar por cuenta, edición y filtro de Historial con categorías ocultas, botón "← Atrás" y Atrás de Android en toda hoja (History API) con "¿Descartar cambios?", aviso de descarga en el celular, visor sin texto de diagnóstico y fórmula de Sheets con "Importados" y "Gastos".
+     - [ ] La migración conserva todos los gastos y deja en cada cuenta las categorías activas de antes, en el mismo orden.
+     - [ ] Cada cuenta muestra en Registrar sus categorías en su orden (3 columnas, hasta 4 filas, sin scroll) y la cuadrícula cambia al instante al cambiar de cuenta; registrar sigue siendo 3 toques.
+     - [ ] El botón Atrás de Android, también en la app instalada, cierra la hoja abierta (la de arriba si hay anidadas) en lugar de salir de la app; con cambios sin guardar pregunta "¿Descartar cambios?".
+   - **7b. Respaldo, resumen y almacenamiento.** Respaldo JSON (con las categorías y la lista `categoriaIds` de cada cuenta), restauración con fusión, pantalla Resumen y estado del almacenamiento en Ajustes.
+     - [ ] Restaurar un respaldo en un navegador limpio recupera gastos y fotos.
 
 Pruebas: Vitest para la lógica (formato de montos, generación de CSV, fusión de respaldos) y una lista de verificación manual en el celular al cerrar cada fase.
 

@@ -1,4 +1,5 @@
 import Dexie, { type Table } from 'dexie';
+import { idsIniciales, migrarCuentas, type EstadoCatalogo, type ResultadoCatalogo } from './lib/categorias';
 import { completarCuenta, CUENTA_INICIAL, CUENTA_PERSONAL_ID } from './lib/cuentas';
 import { aplicarMarca, eliminadoDe, restaurarTrasDeshacer, type MarcaPrevia, type PlanMarca } from './lib/exportar';
 import { limpiarFotosHuerfanas } from './lib/fotos';
@@ -28,7 +29,7 @@ export const AJUSTES_INICIALES: Record<string, unknown> = {
   monedasVisibles: ['COP', 'USD', 'EUR'],
   ultimaExportacion: null,
   cuentaPredeterminada: CUENTA_PERSONAL_ID,
-  versionEsquema: 3,
+  versionEsquema: 4,
 };
 
 class GastosDB extends Dexie {
@@ -72,8 +73,18 @@ class GastosDB extends Dexie {
       .upgrade(async (tx) => {
         await tx.table('ajustes').put({ clave: 'versionEsquema', valor: 3 });
       });
+    // Fase 7a: cada cuenta guarda qué categorías muestra y en qué orden. No se crean tablas ni se tocan
+    // los gastos; si algo falla Dexie deja la base en la versión 3.
+    this.version(4)
+      .stores({})
+      .upgrade(async (tx) => {
+        const categorias = (await tx.table('categorias').toArray()) as Categoria[];
+        const cuentas = (await tx.table('cuentas').toArray()) as Cuenta[];
+        await tx.table('cuentas').bulkPut(migrarCuentas(cuentas, categorias));
+        await tx.table('ajustes').put({ clave: 'versionEsquema', valor: 4 });
+      });
     this.on('populate', (tx) => {
-      void tx.table('cuentas').bulkAdd([CUENTA_INICIAL]);
+      void tx.table('cuentas').bulkAdd([{ ...CUENTA_INICIAL, categoriaIds: idsIniciales(CATEGORIAS_INICIALES) }]);
       void tx.table('categorias').bulkAdd(CATEGORIAS_INICIALES);
       void tx
         .table('ajustes')
@@ -135,6 +146,28 @@ export function limpiarHuerfanasEnDb(): Promise<number> {
       borrar: (ids) => db.fotos.bulkDelete(ids),
     }),
   );
+}
+
+// ---------- Fase 7a: catálogo de categorías ----------
+
+/**
+ * Aplica un cambio al catálogo y a las listas de las cuentas en una sola transacción.
+ * `contarGastosDe`: id de la categoría cuyos gastos se cuentan dentro de la misma transacción (para borrar).
+ */
+export function modificarCatalogo(
+  operar: (estado: EstadoCatalogo, totalGastos: number) => ResultadoCatalogo,
+  contarGastosDe?: string,
+): Promise<ResultadoCatalogo> {
+  return db.transaction('rw', db.categorias, db.cuentas, db.gastos, async () => {
+    const [categorias, cuentas] = await Promise.all([db.categorias.toArray(), db.cuentas.toArray()]);
+    const total = contarGastosDe ? await db.gastos.where('categoriaId').equals(contarGastosDe).count() : 0;
+    const r = operar({ categorias, cuentas }, total);
+    if (!r.ok) return r;
+    if (r.borradas.length > 0) await db.categorias.bulkDelete(r.borradas);
+    await db.categorias.bulkPut(r.categorias);
+    await db.cuentas.bulkPut(r.cuentas);
+    return r;
+  });
 }
 
 export async function borrarAjuste(clave: string): Promise<void> {

@@ -207,7 +207,8 @@ button {
   place-items: center;
   align-content: center;
   gap: 2px;
-  min-height: 72px;
+  /* Hasta 4 filas de 3 (12 categorías) sin scroll en 393×852: 64 px es el mínimo permitido. */
+  min-height: 64px;
   border-radius: 14px;
   background: var(--accent);
   color: var(--on-accent);
@@ -1006,4 +1007,52 @@ button {
   white-space: pre-wrap;
   word-break: break-all;
   user-select: text;
+}
+
+/* ---------- Fase 7a: navegación hacia atrás y categorías por cuenta ---------- */
+/* "← Atrás" arriba de toda hoja o pantalla secundaria; queda fijo al desplazar la hoja. */
+.btn-atras {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  justify-self: start;
+  min-height: 48px;
+  padding: 0 18px;
+  border-radius: 14px;
+  background: var(--surface-2);
+  color: var(--fg);
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.panel-listo > .btn-atras,
+.ajustes-seccion > .btn-atras {
+  position: static;
+}
+
+/* Cuadro de confirmación ("¿Descartar cambios?"): por encima de hojas y visor, por debajo de los avisos. */
+.hoja-dialogo {
+  z-index: 18;
+}
+
+.hoja-dialogo .hoja-titulo {
+  padding: 4px 2px 8px;
+}
+
+/* El visor ya trae su propio posicionamiento para el botón. */
+.visor-cerrar.btn-atras {
+  position: absolute;
+  background: rgb(0 0 0 / 0.65);
+  color: #fff;
+}
+
+.edit-cat-marca {
+  font-size: 0.7rem;
+  font-weight: 400;
+  opacity: 0.85;
+}
+
+.edit-cat:has(.edit-cat-marca) {
+  border-style: dashed;
+  border-color: var(--muted);
 }

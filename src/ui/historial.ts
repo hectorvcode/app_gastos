@@ -5,6 +5,7 @@ import {
   repoAjustes,
   restaurarGastoEliminado,
 } from '../db';
+import { marcaOculta, opcionesParaEdicion } from '../lib/categorias';
 import { generarUuid, mensajeDeError } from '../lib/compat';
 import { cuentasActivas, etiquetaCuenta, ordenadas } from '../lib/cuentas';
 import {
@@ -19,6 +20,7 @@ import {
 import { aplicarCambioFoto, ErrorFoto, mensajeErrorAlmacenamiento, textoInfoFoto, type CambioFoto } from '../lib/fotos';
 import {
   agruparPorDia,
+  edicionTieneCambios,
   eliminarGasto,
   filtrarGastos,
   validarEdicion,
@@ -27,10 +29,12 @@ import {
 } from '../lib/historial';
 import { decimalsFor, formatMonto, montoParaCampo, simboloMoneda } from '../lib/money';
 import { CATALOGO_MONEDAS, cargarConfigMonedas } from '../lib/monedas';
+import type { Capa } from '../lib/navegacion';
 import { MAX_NOTA } from '../lib/nota';
 import type { Categoria, Cuenta, Foto, Gasto } from '../types';
 import { mostrarError } from './avisos';
 import { crearSelectorFoto, procesarArchivoElegido } from './foto-selector';
+import { botonAtras, navegacion } from './navegacion';
 import { cerrarTecladoConEnter } from './teclado';
 import { abrirVisor } from './visor';
 
@@ -117,7 +121,7 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
   const lista2Panel = el('div', 'hoja-panel');
   lista2.append(lista2Panel);
   lista2.addEventListener('click', (e) => {
-    if (e.target === lista2) lista2.hidden = true;
+    if (e.target === lista2) cerrarLista();
   });
 
   // Selector de archivos compartido por la hoja de edición (cámara y galería).
@@ -131,10 +135,31 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
     urlsMiniaturas = [];
   }
 
-  function cerrarEdicion(): void {
+  // Las dos hojas se registran en la pila de navegación: el Atrás de Android cierra la de arriba.
+  let capaEdicion: Capa | null = null;
+  let capaLista: Capa | null = null;
+
+  function ocultarLista(): void {
+    capaLista = null;
+    lista2.hidden = true;
+  }
+
+  function cerrarLista(): void {
+    if (capaLista) capaLista.cerrar();
+    else ocultarLista();
+  }
+
+  function ocultarEdicion(): void {
+    capaEdicion = null;
     hoja.hidden = true;
     limpiarEdicion?.();
     limpiarEdicion = null;
+  }
+
+  /** Cierra sin preguntar (tras guardar o eliminar). Atrás y Cancelar pasan por navegacion.atras(). */
+  function cerrarEdicion(): void {
+    if (capaEdicion) capaEdicion.cerrar();
+    else ocultarEdicion();
   }
 
   // ---------- Datos ----------
@@ -157,6 +182,7 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
       cuentas = cts;
       // Si la cuenta filtrada ya no existe (se borró), se vuelve a "Todas".
       if (cuentaFiltro !== null && !cuentas.some((c) => c.id === cuentaFiltro)) cuentaFiltro = null;
+      if (categoriaFiltro !== null && !categorias.some((c) => c.id === categoriaFiltro)) categoriaFiltro = null;
       monedasVisibles = config.visibles;
       gastosMes = gastos;
       limite = FILAS_POR_LOTE;
@@ -174,11 +200,7 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
     const hoy = mesDe(new Date());
     btnSiguiente.disabled = actual.anio === hoy.anio && actual.mes === hoy.mes;
 
-    selCategoria.replaceChildren(
-      new Option('Todas las categorías', ''),
-      ...categorias.map((c) => new Option(`${c.emoji} ${c.nombre}`, c.id)),
-    );
-    selCategoria.value = categoriaFiltro ?? '';
+    pintarOpcionesCategoria();
 
     // Con una sola cuenta no hay nada que filtrar. Las archivadas siguen apareciendo aquí.
     selCuenta.hidden = cuentas.length <= 1;
@@ -187,6 +209,19 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
       ...ordenadas(cuentas).map((c) => new Option(`${etiquetaCuenta(c)}${c.archivada ? ' (archivada)' : ''}`, c.id)),
     );
     selCuenta.value = cuentaFiltro ?? '';
+  }
+
+  /**
+   * Todo el catálogo. Con "Todas las cuentas" marca solo las ocultas del catálogo "(oculta)"; con una cuenta
+   * específica marca además las que esa cuenta no muestra "(oculta en <cuenta>)".
+   */
+  function pintarOpcionesCategoria(): void {
+    const cuenta = cuentaFiltro === null ? null : cuentas.find((c) => c.id === cuentaFiltro);
+    selCategoria.replaceChildren(
+      new Option('Todas las categorías', ''),
+      ...categorias.map((c) => new Option(`${c.emoji} ${c.nombre}${marcaOculta(c, categorias, cuenta, cuentasActivas(cuentas))}`, c.id)),
+    );
+    selCategoria.value = categoriaFiltro ?? '';
   }
 
   function pintarLista(): void {
@@ -259,7 +294,7 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
         mostrarError('La foto de este gasto ya no está disponible.');
         return;
       }
-      abrirVisor(f.blob, f.ancho, f.alto, f.diag);
+      abrirVisor(f.blob, f.ancho, f.alto);
     } catch (e) {
       mostrarError(`No se pudo abrir la foto: ${mensajeDeError(e)}`);
     }
@@ -347,7 +382,8 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
     iMonto.type = 'text';
     iMonto.inputMode = 'decimal';
     iMonto.autocomplete = 'off';
-    iMonto.value = g.monto.toFixed(decimalsFor(g.moneda));
+    const montoInicial = g.monto.toFixed(decimalsFor(g.moneda));
+    iMonto.value = montoInicial;
     iMonto.setAttribute('aria-label', `Monto en ${g.moneda}`);
     cerrarTecladoConEnter(iMonto);
     const filaMonto = el('div', 'edit-monto');
@@ -373,17 +409,18 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
         b.type = 'button';
         b.classList.toggle('activa', o.activa === true);
         b.addEventListener('click', () => {
-          lista2.hidden = true;
+          cerrarLista();
           o.alElegir();
         });
         return b;
       });
       const cerrar = el('button', 'hoja-op hoja-cerrar', 'Cancelar');
       cerrar.type = 'button';
-      cerrar.addEventListener('click', () => (lista2.hidden = true));
-      lista2Panel.replaceChildren(el('h2', 'hoja-titulo', nombre), ...botones, cerrar);
+      cerrar.addEventListener('click', cerrarLista);
+      lista2Panel.replaceChildren(botonAtras(), el('h2', 'hoja-titulo', nombre), ...botones, cerrar);
       lista2.hidden = false;
       lista2Panel.scrollTop = 0;
+      capaLista = navegacion.abrir({ cerrar: ocultarLista });
     }
 
     // ---- Moneda ----
@@ -434,6 +471,7 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
           alElegir: () => {
             cuentaId = c.id;
             pintarChipCuenta();
+            pintarCategoriasEdicion(); // la categoría elegida se conserva, aunque la nueva cuenta no la muestre
           },
         })),
       ),
@@ -442,19 +480,35 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
     seccionCuenta.hidden = opcionesCuenta.length <= 1;
 
     // ---- Categoría: cuadrícula con emoji; la elegida se resalta ----
+    // Las visibles de la cuenta del gasto, más la categoría actual si está fuera (marcada).
     const cuadricula = el('div', 'edit-categorias');
-    const botonesCat = categorias.map((c) => {
-      const b = el('button', 'edit-cat');
-      b.type = 'button';
-      b.append(el('span', 'edit-cat-emoji', c.emoji), el('span', 'edit-cat-nombre', c.nombre));
-      b.setAttribute('aria-pressed', String(c.id === categoriaId));
-      b.addEventListener('click', () => {
-        categoriaId = c.id;
-        for (const o of botonesCat) o.setAttribute('aria-pressed', String(o === b));
-      });
-      return b;
-    });
-    cuadricula.append(...botonesCat);
+    function pintarCategoriasEdicion(): void {
+      const opciones = opcionesParaEdicion(
+        cuentas.find((x) => x.id === cuentaId),
+        categorias,
+        g.categoriaId,
+        categoriaId,
+      );
+      cuadricula.replaceChildren(
+        ...opciones.map((o) => {
+          const b = el('button', 'edit-cat');
+          b.type = 'button';
+          b.append(el('span', 'edit-cat-emoji', o.categoria.emoji), el('span', 'edit-cat-nombre', o.categoria.nombre));
+          const marca = marcaOculta(o.categoria, categorias, cuentas.find((x) => x.id === cuentaId)).trim();
+          if (marca) {
+            b.append(el('span', 'edit-cat-marca', marca));
+            b.setAttribute('aria-label', `${o.categoria.nombre} ${marca}`);
+          }
+          b.setAttribute('aria-pressed', String(o.categoria.id === categoriaId));
+          b.addEventListener('click', () => {
+            categoriaId = o.categoria.id;
+            pintarCategoriasEdicion();
+          });
+          return b;
+        }),
+      );
+    }
+    pintarCategoriasEdicion();
 
     // ---- Nota ----
     const iNota = el('input', 'nota-input');
@@ -514,7 +568,7 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
       const acciones = el('div', v ? 'foto-acciones' : 'foto-acciones foto-acciones-una');
       if (v) {
         acciones.append(
-          boton('🔍 Ver', () => abrirVisor(v.blob, v.ancho, v.alto, v.diag)),
+          boton('🔍 Ver', () => abrirVisor(v.blob, v.ancho, v.alto)),
           boton('🔄 Reemplazar', elegirOrigenFoto),
           boton('🗑️ Quitar', () => {
             cambioFoto = g.fotoId ? { tipo: 'quitar' } : { tipo: 'ninguno' };
@@ -564,7 +618,7 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
     limpiarEdicion = () => {
       abierta = false;
       alElegirFoto = null;
-      lista2.hidden = true;
+      ocultarLista();
       liberarUrlsEdicion();
     };
 
@@ -620,7 +674,7 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
       await leer();
     });
 
-    cancelar.addEventListener('click', cerrarEdicion);
+    cancelar.addEventListener('click', () => navegacion.atras()); // con cambios, pregunta "¿Descartar cambios?"
 
     // Guardar queda fijo al borde inferior de la hoja: visible aunque el teclado esté abierto.
     const pie = el('div', 'hoja-pie');
@@ -628,6 +682,7 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
 
     // "Eliminar gasto" va al final, después de Cancelar, para no tocarlo por error.
     panel.replaceChildren(
+      botonAtras(),
       titulo,
       seccion('Monto', filaMonto),
       seccion('Fecha y hora', filaFecha),
@@ -642,6 +697,15 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
     );
     hoja.hidden = false;
     panel.scrollTop = 0;
+    capaEdicion = navegacion.abrir({
+      cerrar: ocultarEdicion,
+      hayCambios: () =>
+        edicionTieneCambios(
+          { monto: montoInicial, fecha, hora, moneda: g.moneda, categoriaId: g.categoriaId, cuentaId: g.cuentaId, nota: g.nota },
+          { monto: iMonto.value, fecha: iFecha.value, hora: iHora.value, moneda, categoriaId, cuentaId, nota: iNota.value },
+          cambioFoto.tipo !== 'ninguno' || procesandoFoto,
+        ),
+    });
   }
 
   const repoBorrado = {
@@ -703,11 +767,12 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
   });
   selCuenta.addEventListener('change', () => {
     cuentaFiltro = selCuenta.value || null;
+    pintarOpcionesCategoria();
     limite = FILAS_POR_LOTE;
     pintarLista();
   });
   hoja.addEventListener('click', (e) => {
-    if (e.target === hoja) cerrarEdicion();
+    if (e.target === hoja) navegacion.atras();
   });
 
   return {

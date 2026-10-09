@@ -133,6 +133,32 @@ export function validarEdicion(original: Gasto, c: CambiosGasto, ahora: Date): R
   };
 }
 
+/** Los campos de la hoja "Editar gasto", tal como están escritos (para detectar cambios sin guardar). */
+export interface CamposEdicion {
+  monto: string;
+  fecha: string;
+  hora: string;
+  moneda: string;
+  categoriaId: string;
+  cuentaId: string;
+  nota: string;
+}
+
+/** true si la hoja tiene algo sin guardar; Atrás pregunta "¿Descartar cambios?" solo en ese caso. */
+export function edicionTieneCambios(inicial: CamposEdicion, actual: CamposEdicion, cambioFoto: boolean): boolean {
+  const monto = (t: string): string => t.trim().replace(',', '.');
+  return (
+    cambioFoto ||
+    monto(actual.monto) !== monto(inicial.monto) ||
+    actual.fecha !== inicial.fecha ||
+    actual.hora !== inicial.hora ||
+    actual.moneda !== inicial.moneda ||
+    actual.categoriaId !== inicial.categoriaId ||
+    actual.cuentaId !== inicial.cuentaId ||
+    actual.nota.trim() !== inicial.nota.trim()
+  );
+}
+
 // ---------- Borrado con deshacer ----------
 
 export interface RepoHistorial {

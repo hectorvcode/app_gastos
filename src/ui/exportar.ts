@@ -22,6 +22,7 @@ import {
   pendienteDeExportar,
   prepararArchivo,
   seleccionar,
+  textoDescarga,
   totalFilas,
   validarRango,
   type Alcance,
@@ -33,7 +34,9 @@ import {
 } from '../lib/exportar';
 import { textoPeso } from '../lib/fotos';
 import type { Cuenta } from '../types';
+import type { Capa } from '../lib/navegacion';
 import { mostrarAviso, mostrarError } from './avisos';
+import { botonAtras, navegacion } from './navegacion';
 
 const DESHACER_MARCA_MS = 10_000;
 
@@ -235,6 +238,17 @@ export function crearSeccionExportar(): SeccionExportar {
   textoProgreso.setAttribute('role', 'status');
   const panelListo = el('div', 'ajustes-seccion');
   panelListo.hidden = true;
+  // "Archivo listo" es una pantalla secundaria: se registra en la pila y el Atrás de Android la cierra.
+  let capaListo: Capa | null = null;
+  function ocultarListo(): void {
+    capaListo = null;
+    preparado = null; // el archivo armado se descarta; se vuelve a armar al exportar
+    panelListo.hidden = true;
+  }
+  function cerrarListo(): void {
+    if (capaListo) capaListo.cerrar();
+    else ocultarListo();
+  }
   const resultado = el('p', 'exportar-resultado');
   resultado.setAttribute('role', 'status');
   const ultima = el('p', 'hoja-ayuda');
@@ -361,7 +375,7 @@ export function crearSeccionExportar(): SeccionExportar {
 
     // Cambiar cualquier opción descarta el archivo que esperaba un toque para compartirse.
     preparado = null;
-    panelListo.hidden = true;
+    cerrarListo();
     void actualizarResumen();
   }
 
@@ -456,7 +470,7 @@ export function crearSeccionExportar(): SeccionExportar {
 
   async function terminar(listo: ArchivoListo, r: ResultadoEntrega): Promise<void> {
     anotar('entrega: resultado', { estado: r.estado });
-    panelListo.hidden = true;
+    cerrarListo();
     if (r.estado === 'cancelado') {
       resultado.textContent = 'Compartir cancelado: no se marcó nada como exportado.';
       mostrarResultado();
@@ -481,8 +495,7 @@ export function crearSeccionExportar(): SeccionExportar {
       // Compartir terminado no garantiza que el destino lo reciba: también se puede deshacer la marca.
       if (listo.plan.marca) mostrarDeshacerMarca(r.previa, marcados);
     } else {
-      const ayuda = esDispositivoMovil() ? ' Si no ves la descarga, revisa las notificaciones de Chrome.' : '';
-      resultado.textContent = `Se descargó ${listo.archivo.name} en tu carpeta de descargas. No puedo saber si llegó a su destino.${ayuda}${detalle}${faltan}`;
+      resultado.textContent = `${textoDescarga(listo.archivo.name, esDispositivoMovil())}${detalle}${faltan}`;
       if (listo.plan.marca) mostrarDeshacerMarca(r.previa, marcados);
     }
     if (faltan) mostrarAviso(faltan.trim());
@@ -536,7 +549,7 @@ export function crearSeccionExportar(): SeccionExportar {
       mostrarResultado();
     } else if (r.estado === 'completo') {
       preparado = null;
-      panelListo.hidden = true;
+      cerrarListo();
       const marcados = listo.plan.marca ? listo.gastos + listo.eliminados : 0;
       const detalle = listo.plan.marca ? ` ${marcados} marcados como exportados.` : '';
       resultado.textContent = `Listo: datos y fotos compartidos (${listo.lote?.length ?? 0} archivos en ${r.total} ${r.total === 1 ? 'tanda' : 'tandas'}).${detalle}`;
@@ -632,8 +645,16 @@ export function crearSeccionExportar(): SeccionExportar {
         'cat-op',
       ),
     );
-    panelListo.replaceChildren(...partes);
+    panelListo.replaceChildren(botonAtras(), ...partes);
     panelListo.hidden = false;
+    // Atrás (botón o Android) pregunta antes de descartar el archivo ya armado; cerrar por código no pregunta.
+    if (!capaListo) {
+      capaListo = navegacion.abrir({
+        cerrar: ocultarListo,
+        hayCambios: () => preparado !== null,
+        confirmacion: { mensaje: '¿Descartar el archivo preparado?', descartar: 'Descartar archivo', seguir: 'Conservarlo' },
+      });
+    }
     if (avisar) {
       resultado.textContent = '';
       mostrarAviso(`El archivo ${listo.archivo.name} está listo: elige cómo compartirlo o descargarlo.`);
@@ -645,7 +666,7 @@ export function crearSeccionExportar(): SeccionExportar {
     if (ocupado) return;
     ocultarToast();
     resultado.textContent = '';
-    panelListo.hidden = true;
+    cerrarListo();
     estadoPanel = { zipRechazado: false, loteRechazado: null, siguienteTanda: 0 };
     bitacora.limpiar();
     anotar('exportar: inicio', {

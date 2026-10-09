@@ -1,4 +1,26 @@
-import { db, repoAjustes } from '../db';
+import { db, modificarCatalogo, repoAjustes } from '../db';
+import {
+  borrarCategoria,
+  capturarPrevia,
+  crearCategoria,
+  deshacerVisibilidad,
+  editarCategoria,
+  EMOJI_CATEGORIA_POR_DEFECTO,
+  idsIniciales,
+  idsVisibles,
+  MAX_NOMBRE_CATEGORIA,
+  MAX_VISIBLES,
+  moverEnCuenta,
+  mostrarEnCatalogo,
+  mostrarEnCuenta,
+  ocultarDelCatalogo,
+  ocultarEnCuenta,
+  textoOcultaEnCuenta,
+  textoOcultaEnTodas,
+  type EstadoCatalogo,
+  type PreviaVisibilidad,
+  type ResultadoCatalogo,
+} from '../lib/categorias';
 import { generarUuid, mensajeDeError } from '../lib/compat';
 import { modoReciboActivo } from '../lib/fotos';
 import {
@@ -6,6 +28,7 @@ import {
   borrarCuenta,
   cargarEstadoCuentas,
   crearCuenta,
+  cuentasActivas,
   desarchivarCuenta,
   editarCuenta,
   etiquetaCuenta,
@@ -27,9 +50,11 @@ import {
   type ConfigMonedas,
   type ResultadoConfig,
 } from '../lib/monedas';
-import type { Cuenta } from '../types';
+import type { Capa } from '../lib/navegacion';
+import type { Categoria, Cuenta } from '../types';
 import { mostrarAviso, mostrarError } from './avisos';
 import { crearSeccionExportar } from './exportar';
+import { botonAtras, confirmarAccion, navegacion } from './navegacion';
 import { cerrarTecladoConEnter } from './teclado';
 
 function el<K extends keyof HTMLElementTagNameMap>(
@@ -49,12 +74,16 @@ export interface VistaAjustes {
   activar(): Promise<void>;
 }
 
-/** Ajustes: secciones "Monedas", "Cuentas", "Fotos" y "Exportar" (el resto llega en la Fase 7). */
+/** Ajustes: secciones "Exportar", "Categorías", "Cuentas", "Monedas" y "Fotos" (almacenamiento y respaldo llegan en la Fase 7b). */
 export function crearAjustes(): VistaAjustes {
   let config: ConfigMonedas | null = null;
   let cuentas: Cuenta[] = [];
   let cuentaPredeterminada = '';
   let gastosPorCuenta = new Map<string, number>();
+  let catalogo: Categoria[] = [];
+  let gastosPorCategoria = new Map<string, number>();
+  /** Cuenta cuyas categorías se están editando (empieza en la cuenta actual de Registrar). */
+  let cuentaCats = '';
 
   const root = el('section', 'ajustes');
   const seccion = el('div', 'ajustes-seccion');
@@ -100,6 +129,36 @@ export function crearAjustes(): VistaAjustes {
     btnNueva,
   );
 
+  // ---------- Sección Categorías ----------
+  const seccionCategorias = el('div', 'ajustes-seccion');
+  const bloqueCuentaCats = el('div', 'edit-seccion');
+  const selCuentaCats = el('select', 'filtro-categoria');
+  selCuentaCats.setAttribute('aria-label', 'Categorías de la cuenta');
+  bloqueCuentaCats.append(el('p', 'edit-titulo', 'Categorías de'), selCuentaCats);
+  const resumenCats = el('p', 'exportar-resumen');
+  const listaCats = el('div', 'monedas-lista');
+  const mensajeCats = el('p', 'hoja-ayuda');
+  mensajeCats.setAttribute('role', 'status');
+  const btnNuevaCat = el('button', 'btn-primario', 'Nueva categoría');
+  btnNuevaCat.type = 'button';
+  seccionCategorias.append(
+    el(
+      'p',
+      'hoja-ayuda',
+      'Las categorías son las mismas en todas las cuentas; cada cuenta elige cuáles muestra en Registrar (máximo 12, para que quepan sin scroll) y en qué orden. Renombrar, cambiar el emoji, ocultar o borrar una categoría afecta a todas las cuentas.',
+    ),
+    bloqueCuentaCats,
+    resumenCats,
+    listaCats,
+    mensajeCats,
+    btnNuevaCat,
+  );
+  selCuentaCats.addEventListener('change', () => {
+    cuentaCats = selCuentaCats.value;
+    mensajeCats.textContent = '';
+    pintarCategorias();
+  });
+
   // ---------- Sección Fotos ----------
   const seccionFotos = el('div', 'ajustes-seccion');
   const btnModoRecibo = el('button', 'cat-op fila-interruptor');
@@ -137,8 +196,27 @@ export function crearAjustes(): VistaAjustes {
   hoja.hidden = true;
   const hojaPanel = el('div', 'hoja-panel');
   hoja.append(hojaPanel);
+  let capaHoja: Capa | null = null;
+  let hayCambiosHoja: (() => boolean) | undefined;
+  function ocultarHoja(): void {
+    capaHoja = null;
+    hayCambiosHoja = undefined;
+    hoja.hidden = true;
+  }
+  /** Cierra la hoja sin preguntar (tras guardar). Atrás, Cancelar y tocar fuera usan navegacion.atras(). */
+  function cerrarHoja(): void {
+    if (capaHoja) capaHoja.cerrar();
+    else ocultarHoja();
+  }
+  /** Muestra la hoja ya armada y la registra en la pila: el Atrás de Android la cierra. */
+  function mostrarHoja(hayCambios?: () => boolean): void {
+    hayCambiosHoja = hayCambios;
+    hoja.hidden = false;
+    hojaPanel.scrollTop = 0;
+    capaHoja = navegacion.abrir({ cerrar: ocultarHoja, hayCambios: () => hayCambiosHoja?.() ?? false });
+  }
   hoja.addEventListener('click', (e) => {
-    if (e.target === hoja) hoja.hidden = true;
+    if (e.target === hoja) navegacion.atras();
   });
 
   const exportar = crearSeccionExportar();
@@ -170,11 +248,12 @@ export function crearAjustes(): VistaAjustes {
 
   root.append(
     plegable('Exportar', exportar.el),
+    plegable('Categorías', seccionCategorias),
     plegable('Cuentas', seccionCuentas),
     plegable('Monedas', seccion),
     plegable('Fotos', seccionFotos),
     hoja,
-    el('p', 'pronto-resto', 'Categorías, almacenamiento y respaldo: próximamente'),
+    el('p', 'pronto-resto', 'Almacenamiento y respaldo: próximamente'),
   );
 
   /** Dice por qué se bloqueó una acción: en línea y en el aviso fijo de arriba (siempre a la vista). */
@@ -237,6 +316,268 @@ export function crearAjustes(): VistaAjustes {
     listaResto.hidden = !masAbierto || resto.length === 0;
   }
 
+  // ---------- Categorías ----------
+  async function leerCategorias(): Promise<void> {
+    catalogo = await db.categorias.orderBy('orden').toArray();
+    const conteos = await Promise.all(
+      catalogo.map(async (c) => [c.id, await db.gastos.where('categoriaId').equals(c.id).count()] as const),
+    );
+    gastosPorCategoria = new Map(conteos);
+    pintarCategorias();
+  }
+
+  /**
+   * Aplica un cambio al catálogo (una sola transacción). Si una regla lo impide, lo dice en pantalla y
+   * devuelve su error; si se guardó devuelve null.
+   */
+  async function aplicarCategorias(
+    operar: (estado: EstadoCatalogo, totalGastos: number) => ResultadoCatalogo,
+    contarGastosDe?: string,
+  ): Promise<string | null> {
+    let r: ResultadoCatalogo;
+    try {
+      r = await modificarCatalogo(operar, contarGastosDe);
+    } catch (e) {
+      mostrarError(`No se pudo guardar las categorías: ${mensajeDeError(e)}`);
+      return 'No se pudo guardar las categorías.';
+    }
+    if (!r.ok) {
+      avisarRegla(mensajeCats, r.error);
+      return r.error;
+    }
+    mensajeCats.textContent = r.aviso ?? '';
+    if (r.aviso) mostrarAviso(r.aviso);
+    try {
+      cuentas = await db.cuentas.toArray();
+      await leerCategorias();
+    } catch (e) {
+      mostrarError(`No se pudo actualizar la lista de categorías: ${mensajeDeError(e)}`);
+    }
+    return null;
+  }
+
+  // ---- Aviso "… Deshacer" al ocultar (en una cuenta o en todas): nunca queda sin respuesta visible ----
+  const avisoDeshacer = el('div', 'toast');
+  avisoDeshacer.hidden = true;
+  avisoDeshacer.setAttribute('role', 'status');
+  const avisoDeshacerTexto = el('span');
+  const avisoDeshacerBtn = el('button', 'toast-btn', 'Deshacer');
+  avisoDeshacerBtn.type = 'button';
+  avisoDeshacer.append(avisoDeshacerTexto, avisoDeshacerBtn);
+  root.append(avisoDeshacer);
+  let avisoDeshacerTimer: number | undefined;
+  const DESHACER_OCULTAR_MS = 8000;
+
+  function ocultarAvisoDeshacer(): void {
+    window.clearTimeout(avisoDeshacerTimer);
+    avisoDeshacer.hidden = true;
+    avisoDeshacerBtn.onclick = null;
+  }
+
+  function mostrarAvisoDeshacer(texto: string, previa: PreviaVisibilidad): void {
+    window.clearTimeout(avisoDeshacerTimer);
+    avisoDeshacerTexto.textContent = texto;
+    avisoDeshacer.hidden = false;
+    avisoDeshacerBtn.onclick = async () => {
+      ocultarAvisoDeshacer();
+      // Devuelve la visibilidad y el orden de cada cuenta tal como estaban antes de ocultar.
+      const motivo = await aplicarCategorias((e) => deshacerVisibilidad(e, previa));
+      if (motivo === null) mostrarAviso('Se restauró la visibilidad de la categoría.');
+    };
+    avisoDeshacerTimer = window.setTimeout(ocultarAvisoDeshacer, DESHACER_OCULTAR_MS);
+  }
+
+  /**
+   * Oculta una categoría solo en la cuenta seleccionada (`enTodas` = false) o en todo el catálogo, sin pedir
+   * confirmación, y lo dice con un aviso que permite deshacer. Devuelve el error de la regla, o null si se ocultó.
+   */
+  async function ocultarConDeshacer(c: Categoria, enTodas: boolean): Promise<string | null> {
+    const cuenta = cuentas.find((x) => x.id === cuentaCats);
+    const previa: { valor: PreviaVisibilidad | null } = { valor: null };
+    const total = gastosPorCategoria.get(c.id) ?? 0;
+    const motivo = await aplicarCategorias((e) => {
+      previa.valor = capturarPrevia(e, c.id, enTodas ? null : cuentaCats);
+      return enTodas ? ocultarDelCatalogo(e, c.id) : ocultarEnCuenta(e, cuentaCats, c.id);
+    });
+    if (motivo === null && previa.valor) {
+      mostrarAvisoDeshacer(
+        enTodas ? textoOcultaEnTodas(c.nombre, total) : textoOcultaEnCuenta(c.nombre, cuenta?.nombre ?? 'esta cuenta'),
+        previa.valor,
+      );
+    }
+    return motivo;
+  }
+
+  function pintarCategorias(): void {
+    const activas = cuentasActivas(cuentas);
+    if (!activas.some((c) => c.id === cuentaCats)) cuentaCats = activas[0]?.id ?? '';
+    bloqueCuentaCats.hidden = activas.length <= 1;
+    selCuentaCats.replaceChildren(...activas.map((c) => new Option(etiquetaCuenta(c), c.id)));
+    selCuentaCats.value = cuentaCats;
+
+    const cuenta = cuentas.find((c) => c.id === cuentaCats);
+    const ids = idsVisibles(cuenta, catalogo);
+    const porId = new Map(catalogo.map((c) => [c.id, c]));
+    const visibles = ids.map((id) => porId.get(id)).filter((c): c is Categoria => c !== undefined);
+    const resto = catalogo.filter((c) => c.activa && !ids.includes(c.id));
+    const fueraDelCatalogo = catalogo.filter((c) => !c.activa);
+    const nombreCuenta = cuenta && activas.length > 1 ? ` en ${cuenta.nombre}` : '';
+    resumenCats.textContent = `Visibles en Registrar${nombreCuenta}: ${visibles.length} de ${MAX_VISIBLES}`;
+
+    const fila = (c: Categoria, posicion: number | null): HTMLElement => {
+      const n = gastosPorCategoria.get(c.id) ?? 0;
+      const f = el('div', 'moneda-fila');
+      const nota = c.activa ? '' : ' · oculta del catálogo';
+      f.append(el('span', 'moneda-nombre', `${c.emoji} ${c.nombre}${nota}`));
+      f.append(el('span', 'hoja-ayuda cuenta-total', n === 1 ? '1 gasto' : `${n} gastos`));
+      if (c.activa) {
+        const visible = posicion !== null;
+        if (visible) {
+          const sube = el('button', 'cat-op', '▲ Subir');
+          sube.type = 'button';
+          sube.setAttribute('aria-label', `Subir ${c.nombre}`);
+          sube.addEventListener('click', () => void aplicarCategorias((e) => moverEnCuenta(e, cuentaCats, c.id, -1)));
+          const baja = el('button', 'cat-op', '▼ Bajar');
+          baja.type = 'button';
+          baja.setAttribute('aria-label', `Bajar ${c.nombre}`);
+          baja.addEventListener('click', () => void aplicarCategorias((e) => moverEnCuenta(e, cuentaCats, c.id, 1)));
+          f.append(sube, baja);
+        }
+        const nombreCuenta = cuenta?.nombre ?? 'la cuenta';
+        const alterna = el('button', 'cat-op', visible ? `Visible en ${nombreCuenta}` : `Oculta en ${nombreCuenta}`);
+        alterna.type = 'button';
+        alterna.setAttribute('aria-pressed', String(visible));
+        alterna.setAttribute('aria-label', `${c.nombre}: ${visible ? 'visible' : 'oculta'} en ${nombreCuenta}. Toca para ${visible ? 'ocultarla' : 'mostrarla'} solo en esta cuenta`);
+        alterna.addEventListener('click', () => {
+          if (visible) void ocultarConDeshacer(c, false);
+          else void aplicarCategorias((e) => mostrarEnCuenta(e, cuentaCats, c.id));
+        });
+        f.append(alterna);
+      }
+      const editar = el('button', 'cat-op', '✏️ Editar');
+      editar.type = 'button';
+      editar.setAttribute('aria-label', `Editar ${c.nombre}`);
+      editar.addEventListener('click', () => abrirHojaCategoria(c));
+      f.append(editar);
+      return f;
+    };
+    listaCats.replaceChildren(
+      ...visibles.map((c, i) => fila(c, i)),
+      ...resto.map((c) => fila(c, null)),
+      ...fueraDelCatalogo.map((c) => fila(c, null)),
+    );
+  }
+
+  /** Hoja para crear (c = null) o editar una categoría del catálogo. */
+  function abrirHojaCategoria(c: Categoria | null): void {
+    const cuentaDestino = cuentas.find((x) => x.id === cuentaCats);
+    const titulo = el('h2', 'hoja-titulo', c ? 'Editar categoría' : 'Nueva categoría');
+    const aviso = el('p', 'hoja-ayuda aviso-http', 'Afecta a todas las cuentas.');
+    const detalle = el(
+      'p',
+      'hoja-ayuda',
+      c
+        ? `Tiene ${gastosPorCategoria.get(c.id) ?? 0} gastos en total. Renombrarla no cambia los gastos; en Google Sheets, las filas ya importadas conservan el nombre anterior.`
+        : `Se mostrará en ${cuentaDestino?.nombre ?? 'esta cuenta'} (si hay lugar) y quedará oculta en las demás cuentas.`,
+    );
+    const iEmoji = el('input', 'nota-input');
+    iEmoji.type = 'text';
+    iEmoji.maxLength = 8;
+    iEmoji.autocomplete = 'off';
+    iEmoji.placeholder = `Emoji (vacío = ${EMOJI_CATEGORIA_POR_DEFECTO})`;
+    iEmoji.value = c?.emoji ?? '';
+    iEmoji.setAttribute('aria-label', 'Emoji de la categoría');
+    cerrarTecladoConEnter(iEmoji);
+    const iNombre = el('input', 'nota-input');
+    iNombre.type = 'text';
+    iNombre.maxLength = MAX_NOMBRE_CATEGORIA;
+    iNombre.autocomplete = 'off';
+    iNombre.placeholder = 'Nombre (ej. Mascotas)';
+    iNombre.value = c?.nombre ?? '';
+    iNombre.setAttribute('aria-label', 'Nombre de la categoría');
+    cerrarTecladoConEnter(iNombre);
+
+    const error = el('p', 'hoja-error');
+    error.setAttribute('role', 'alert');
+    error.hidden = true;
+    const guardar = el('button', 'btn-primario', c ? 'Guardar cambios' : 'Crear categoría');
+    guardar.type = 'button';
+    const cancelar = el('button', 'hoja-op hoja-cerrar', 'Cancelar');
+    cancelar.type = 'button';
+    cancelar.addEventListener('click', () => navegacion.atras());
+
+    /** Ejecuta la operación; si una regla la bloquea, la hoja sigue abierta con el motivo. */
+    const ejecutar = async (
+      operar: (estado: EstadoCatalogo, total: number) => ResultadoCatalogo,
+      contarGastosDe?: string,
+    ): Promise<void> => {
+      const motivo = await aplicarCategorias(operar, contarGastosDe);
+      if (motivo === null) {
+        cerrarHoja();
+        return;
+      }
+      error.textContent = motivo;
+      error.hidden = false;
+    };
+
+    guardar.addEventListener('click', () =>
+      void ejecutar((estado) =>
+        c
+          ? editarCategoria(estado, c.id, { nombre: iNombre.value, emoji: iEmoji.value })
+          : crearCategoria(estado, iNombre.value, iEmoji.value, generarUuid(), cuentaCats),
+      ),
+    );
+
+    // Guardar queda fijo al borde inferior de la hoja: visible aunque el teclado esté abierto.
+    const pie = el('div', 'hoja-pie');
+    pie.append(error, guardar);
+    const partes: HTMLElement[] = [titulo, aviso, detalle, iEmoji, iNombre, pie];
+
+    if (c) {
+      const alternaCatalogo = el('button', 'hoja-op', c.activa ? 'Ocultar en todas las cuentas' : 'Mostrar en el catálogo');
+      alternaCatalogo.type = 'button';
+      alternaCatalogo.addEventListener('click', async () => {
+        if (!c.activa) {
+          await ejecutar((estado) => mostrarEnCatalogo(estado, c.id, cuentaCats));
+          return;
+        }
+        const motivo = await ocultarConDeshacer(c, true);
+        if (motivo === null) {
+          cerrarHoja();
+          return;
+        }
+        error.textContent = motivo;
+        error.hidden = false;
+      });
+      const ayudaCatalogo = el(
+        'p',
+        'hoja-ayuda',
+        c.activa
+          ? 'Ocultarla la quita de todas las cuentas; sus gastos la conservan y siguen en Historial. Puedes deshacerlo al instante o volver a mostrarla después. Para ocultarla solo en una cuenta, usa el interruptor "Visible en …" de la lista.'
+          : 'Está oculta del catálogo. Al mostrarla vuelve a la cuenta que estás editando (si hay lugar).',
+      );
+      const borrar = el('button', 'btn-peligro', 'Eliminar categoría');
+      borrar.type = 'button';
+      borrar.addEventListener('click', async () => {
+        if ((gastosPorCategoria.get(c.id) ?? 0) > 0) {
+          const motivo = `${c.nombre} tiene gastos y no se puede borrar. Ocúltala del catálogo en su lugar.`;
+          error.textContent = motivo;
+          error.hidden = false;
+          mostrarAviso(motivo);
+          return;
+        }
+        if (!(await confirmarAccion(`¿Eliminar ${c.nombre} de todas las cuentas?`, 'Eliminar'))) return;
+        await ejecutar((estado, n) => borrarCategoria(estado, c.id, n), c.id);
+      });
+      partes.push(alternaCatalogo, ayudaCatalogo, borrar);
+    }
+    partes.push(cancelar);
+    hojaPanel.replaceChildren(botonAtras(), ...partes);
+    mostrarHoja(() => iEmoji.value.trim() !== (c?.emoji ?? '') || iNombre.value.trim() !== (c?.nombre ?? ''));
+  }
+
+  btnNuevaCat.addEventListener('click', () => abrirHojaCategoria(null));
+
   // ---------- Cuentas ----------
   async function leerCuentas(): Promise<void> {
     cuentas = await db.cuentas.toArray();
@@ -246,6 +587,7 @@ export function crearAjustes(): VistaAjustes {
     );
     gastosPorCuenta = new Map(conteos);
     pintarCuentas();
+    pintarCategorias();
   }
 
   /** Guarda el resultado de una regla; si no se cumple, lo dice en pantalla. Devuelve true si se guardó. */
@@ -340,18 +682,18 @@ export function crearAjustes(): VistaAjustes {
     guardar.type = 'button';
     const cancelar = el('button', 'hoja-op hoja-cerrar', 'Cancelar');
     cancelar.type = 'button';
-    cancelar.addEventListener('click', () => (hoja.hidden = true));
+    cancelar.addEventListener('click', () => navegacion.atras());
 
     guardar.addEventListener('click', async () => {
       const r = c
         ? editarCuenta(cuentas, c.id, { nombre: iNombre.value, emoji: iEmoji.value })
-        : crearCuenta(cuentas, iNombre.value, iEmoji.value, generarUuid());
+        : crearCuenta(cuentas, iNombre.value, iEmoji.value, generarUuid(), idsIniciales(catalogo));
       if (!r.ok) {
         error.textContent = r.error;
         error.hidden = false;
         return;
       }
-      if (await aplicarCuentas(r)) hoja.hidden = true; // si falla, la hoja sigue abierta con lo escrito
+      if (await aplicarCuentas(r)) cerrarHoja(); // si falla, la hoja sigue abierta con lo escrito
     });
 
     // Guardar queda fijo al borde inferior de la hoja: visible aunque el teclado esté abierto.
@@ -365,7 +707,7 @@ export function crearAjustes(): VistaAjustes {
       borrar.addEventListener('click', async () => {
         const motivo = await eliminar(c);
         if (motivo === null) {
-          hoja.hidden = true;
+          cerrarHoja();
           return;
         }
         error.textContent = motivo;
@@ -375,9 +717,8 @@ export function crearAjustes(): VistaAjustes {
       partes.push(borrar);
     }
     partes.push(cancelar);
-    hojaPanel.replaceChildren(...partes);
-    hoja.hidden = false;
-    hojaPanel.scrollTop = 0;
+    hojaPanel.replaceChildren(botonAtras(), ...partes);
+    mostrarHoja(() => iEmoji.value.trim() !== (c?.emoji ?? '') || iNombre.value.trim() !== (c?.nombre ?? ''));
   }
 
   btnNueva.addEventListener('click', () => abrirHojaCuenta(null));
@@ -432,7 +773,11 @@ export function crearAjustes(): VistaAjustes {
     pintar();
     modoRecibo = modoReciboActivo(await repoAjustes.get('modoRecibo'));
     pintarModoRecibo();
+    await leerCategorias();
     await leerCuentas();
+    cuentaCats = (await cargarEstadoCuentas(repoAjustes, cuentas)).actual; // empieza en la cuenta actual de Registrar
+    pintarCategorias();
+    mensajeCats.textContent = '';
     await exportar.activar();
   }
 

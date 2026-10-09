@@ -1,11 +1,13 @@
 import { textoInfoFoto } from '../lib/fotos';
+import { botonAtras, navegacion } from './navegacion';
 import { aplicarPellizco, centrar, limitarDesplazamiento, type Vista } from '../lib/zoom';
 
 /**
  * Visor de foto a pantalla completa: zoom de pellizco (y rueda / doble toque), arrastre con zoom
- * y botón para cerrar. Muestra peso y resolución en letra pequeña. Libera la URL al cerrar.
+ * y botón "← Atrás" (también cierra con el Atrás de Android). Muestra peso y resolución en letra pequeña.
+ * Libera la URL al cerrar.
  */
-export function abrirVisor(blob: Blob, ancho: number, alto: number, diag?: string): void {
+export function abrirVisor(blob: Blob, ancho: number, alto: number): void {
   const url = URL.createObjectURL(blob);
   const visor = document.createElement('div');
   visor.className = 'visor';
@@ -21,15 +23,12 @@ export function abrirVisor(blob: Blob, ancho: number, alto: number, diag?: strin
   img.src = url;
   escenario.append(img);
 
-  const cerrar = document.createElement('button');
-  cerrar.type = 'button';
-  cerrar.className = 'visor-cerrar';
-  cerrar.textContent = '✕ Cerrar';
-  cerrar.setAttribute('aria-label', 'Cerrar foto');
+  const cerrar = botonAtras();
+  cerrar.classList.add('visor-cerrar');
 
   const info = document.createElement('p');
   info.className = 'visor-info';
-  info.textContent = textoInfoFoto(blob.size, ancho, alto) + (diag ? ` · ${diag}` : '');
+  info.textContent = textoInfoFoto(blob.size, ancho, alto);
 
   visor.append(escenario, cerrar, info);
   document.body.append(visor);
@@ -119,6 +118,7 @@ export function abrirVisor(blob: Blob, ancho: number, alto: number, diag?: strin
   );
 
   let cerrado = false;
+  const capa = navegacion.abrir({ cerrar: cerrarVisor });
   function cerrarVisor(): void {
     if (cerrado) return;
     cerrado = true;
@@ -128,10 +128,9 @@ export function abrirVisor(blob: Blob, ancho: number, alto: number, diag?: strin
     visor.remove();
   }
   function alTeclear(e: KeyboardEvent): void {
-    if (e.key === 'Escape') cerrarVisor();
+    if (e.key === 'Escape') capa.cerrar();
   }
   document.addEventListener('keydown', alTeclear);
-  cerrar.addEventListener('click', cerrarVisor);
   img.addEventListener('error', () => {
     // El blob no se pudo mostrar: se avisa en el propio visor y se puede cerrar.
     info.textContent = 'No se pudo mostrar la foto.';

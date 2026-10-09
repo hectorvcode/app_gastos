@@ -107,7 +107,14 @@ function limpiarEmoji(emoji: string): string {
   return e === '' ? EMOJI_CUENTA_POR_DEFECTO : e.slice(0, MAX_EMOJI);
 }
 
-export function crearCuenta(cuentas: readonly Cuenta[], nombre: string, emoji: string, id: string): ResultadoCuentas {
+/** `categoriaIds`: las categorías con las que empieza la cuenta (ver `idsIniciales` en lib/categorias.ts). */
+export function crearCuenta(
+  cuentas: readonly Cuenta[],
+  nombre: string,
+  emoji: string,
+  id: string,
+  categoriaIds?: string[],
+): ResultadoCuentas {
   const error = validarNombre(cuentas, nombre, null);
   if (error) return { ok: false, error };
   const nueva: Cuenta = {
@@ -116,6 +123,7 @@ export function crearCuenta(cuentas: readonly Cuenta[], nombre: string, emoji: s
     emoji: limpiarEmoji(emoji),
     orden: cuentas.length,
     archivada: false,
+    ...(categoriaIds ? { categoriaIds: [...categoriaIds] } : {}),
   };
   return { ok: true, cuentas: renumerar([...ordenadas(cuentas), nueva]) };
 }

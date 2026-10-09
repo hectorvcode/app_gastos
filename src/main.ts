@@ -6,10 +6,12 @@ import { instalarManejadorGlobal, mostrarError } from './ui/avisos';
 import { crearAjustes } from './ui/ajustes';
 import { crearHistorial } from './ui/historial';
 import { crearRegistrar } from './ui/registrar';
+import { instalarNavegacion } from './ui/navegacion';
 import { instalarAjusteTeclado } from './ui/teclado';
 
 instalarManejadorGlobal();
 instalarAjusteTeclado();
+instalarNavegacion(); // el Atrás de Android cierra la hoja abierta (History API; sirve sin HTTPS)
 
 // Sin contexto seguro (http://<IP-LAN>) no hay service worker ni storage: se omiten.
 registrarServiceWorker(() => registerSW({ immediate: true }));

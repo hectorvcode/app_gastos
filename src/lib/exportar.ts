@@ -18,6 +18,16 @@ export const MENSAJE_SIN_GASTOS = 'No hay gastos con esos criterios';
 
 export const AVISO_ZIP_HTTP = 'Por HTTP, Chrome puede bloquear la descarga del ZIP; toca Conservar en el aviso de Chrome.';
 
+/**
+ * Aviso tras una descarga directa. En el celular dice dónde quedó el archivo y cómo subirlo a Drive
+ * (Android no muestra la notificación); en escritorio conserva el texto de siempre.
+ */
+export function textoDescarga(nombre: string, movil: boolean): string {
+  return movil
+    ? `Se guardó ${nombre} en Archivos → Descargas. Para subirlo a Drive: abre Files, mantén presionado el archivo → Compartir → Drive.`
+    : `Se descargó ${nombre} en tu carpeta de descargas. No puedo saber si llegó a su destino.`;
+}
+
 /** Avisar antes de exportar un ZIP cuando la página no es un contexto seguro (http://<IP-LAN>). */
 export const debeAvisarZipHttp = (contextoSeguro: boolean, formato: Formato): boolean => !contextoSeguro && formato === 'zip';
 

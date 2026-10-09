@@ -1,7 +1,9 @@
 import { borrarGastoConFoto, guardarGastoConFoto, repoAjustes, repoBorrador, db } from '../db';
 import { avisoRecuperacion, borrarBorrador, guardarBorrador, guardarFotoPendiente, leerBorrador } from '../lib/borrador';
 import { addDays, dayMonthLabel, shortLabel } from '../lib/dates';
+import { categoriasDeRegistrar } from '../lib/categorias';
 import { mensajeDeError } from '../lib/compat';
+import type { Capa } from '../lib/navegacion';
 import {
   cargarEstadoCuentas,
   cuentasActivas,
@@ -25,6 +27,7 @@ import { MAX_NOTA } from '../lib/nota';
 import { aplicarTeclaFisica, SesionRegistro, type CambioMoneda } from '../lib/registro';
 import type { Categoria, Cuenta } from '../types';
 import { mostrarAviso, mostrarError } from './avisos';
+import { botonAtras, navegacion } from './navegacion';
 import { crearSelectorFoto, procesarArchivoElegido } from './foto-selector';
 import { cerrarTecladoConEnter } from './teclado';
 import { abrirVisor } from './visor';
@@ -76,6 +79,7 @@ export async function crearRegistrar(): Promise<VistaRegistrar> {
     delete: borrarGastoConFoto,
   });
   let cuentas: Cuenta[] = await db.cuentas.toArray();
+  let catalogo: Categoria[] = await db.categorias.toArray();
   const estadoCuentas = await cargarEstadoCuentas(repoAjustes, cuentas);
   let cuentaPredeterminada = estadoCuentas.predeterminada;
   sesion.cuentaId = estadoCuentas.actual;
@@ -351,8 +355,9 @@ export async function crearRegistrar(): Promise<VistaRegistrar> {
     }
   }
 
-  async function pintarCategorias(): Promise<void> {
-    const cats = (await db.categorias.orderBy('orden').toArray()).filter((c) => c.activa);
+  /** Las categorías visibles de la cuenta actual, en su orden. Se repinta al instante al cambiar de cuenta. */
+  function pintarCategorias(): void {
+    const cats = categoriasDeRegistrar(cuentas, sesion.cuentaId, catalogo);
     grid.replaceChildren(
       ...cats.map((c) => {
         const b = el('button', 'cat');
@@ -368,7 +373,17 @@ export async function crearRegistrar(): Promise<VistaRegistrar> {
   }
 
   // ---------- Selector de fecha ----------
-  function cerrarHoja(): void {
+  let capaHoja: Capa | null = null;
+
+  /** Muestra la hoja ya armada y la registra en la pila: el Atrás de Android la cierra. */
+  function mostrarHoja(): void {
+    hoja.hidden = false;
+    hojaPanel.scrollTop = 0;
+    capaHoja = navegacion.abrir({ cerrar: ocultarHoja });
+  }
+
+  function ocultarHoja(): void {
+    capaHoja = null;
     hoja.hidden = true;
     pintarFecha();
     pintarMoneda();
@@ -377,6 +392,11 @@ export async function crearRegistrar(): Promise<VistaRegistrar> {
     pintarFoto();
     pintarMonto();
     programarBorrador(); // fecha, moneda, cuenta o nota pudieron cambiar
+  }
+
+  function cerrarHoja(): void {
+    if (capaHoja) capaHoja.cerrar();
+    else ocultarHoja();
   }
 
   function abrirHoja(): void {
@@ -423,8 +443,8 @@ export async function crearRegistrar(): Promise<VistaRegistrar> {
     cerrar.type = 'button';
     cerrar.addEventListener('click', cerrarHoja);
 
-    hojaPanel.replaceChildren(...botones, otra, input, cerrar);
-    hoja.hidden = false;
+    hojaPanel.replaceChildren(botonAtras(), ...botones, otra, input, cerrar);
+    mostrarHoja();
   }
 
   chipFecha.addEventListener('click', (e) => {
@@ -487,8 +507,8 @@ export async function crearRegistrar(): Promise<VistaRegistrar> {
     const cerrar = el('button', 'hoja-op hoja-cerrar', 'Cancelar');
     cerrar.type = 'button';
     cerrar.addEventListener('click', cerrarHoja);
-    hojaPanel.replaceChildren(...botones, cerrar);
-    hoja.hidden = false;
+    hojaPanel.replaceChildren(botonAtras(), ...botones, cerrar);
+    mostrarHoja();
   }
 
   chipMoneda.addEventListener('click', (e) => {
@@ -514,6 +534,7 @@ export async function crearRegistrar(): Promise<VistaRegistrar> {
       b.addEventListener('click', () => {
         sesion.cuentaId = c.id;
         void persistirCuenta();
+        pintarCategorias();
         cerrarHoja();
       });
       return b;
@@ -521,8 +542,8 @@ export async function crearRegistrar(): Promise<VistaRegistrar> {
     const cerrar = el('button', 'hoja-op hoja-cerrar', 'Cancelar');
     cerrar.type = 'button';
     cerrar.addEventListener('click', cerrarHoja);
-    hojaPanel.replaceChildren(...botones, cerrar);
-    hoja.hidden = false;
+    hojaPanel.replaceChildren(botonAtras(), ...botones, cerrar);
+    mostrarHoja();
   }
 
   chipCuenta.addEventListener('click', (e) => {
@@ -563,9 +584,8 @@ export async function crearRegistrar(): Promise<VistaRegistrar> {
     });
     const pie = el('div', 'hoja-pie');
     pie.append(listo, borrar);
-    hojaPanel.replaceChildren(titulo, campo, contador, pie);
-    hoja.hidden = false;
-    hojaPanel.scrollTop = 0;
+    hojaPanel.replaceChildren(botonAtras(), titulo, campo, contador, pie);
+    mostrarHoja();
   }
 
   chipNota.addEventListener('click', (e) => {
@@ -608,7 +628,7 @@ export async function crearRegistrar(): Promise<VistaRegistrar> {
     if (f) {
       partes.push(
         el('p', 'hoja-ayuda', textoInfoFoto(f.blob.size, f.ancho, f.alto)),
-        opcion('🔍 Ver foto', () => abrirVisor(f.blob, f.ancho, f.alto, f.diag)),
+        opcion('🔍 Ver foto', () => abrirVisor(f.blob, f.ancho, f.alto)),
         opcion('📸 Tomar otra foto', () => {
           void abrirSelector(selector.tomar);
           cerrarHoja();
@@ -636,9 +656,8 @@ export async function crearRegistrar(): Promise<VistaRegistrar> {
       );
     }
     partes.push(cancelar);
-    hojaPanel.replaceChildren(...partes);
-    hoja.hidden = false;
-    hojaPanel.scrollTop = 0;
+    hojaPanel.replaceChildren(botonAtras(), ...partes);
+    mostrarHoja();
   }
 
   chipFoto.addEventListener('click', (e) => {
@@ -668,6 +687,7 @@ export async function crearRegistrar(): Promise<VistaRegistrar> {
     const predeterminadaPrevia = config.predeterminada;
     config = await cargarConfigMonedas(repoAjustes);
     cuentas = await db.cuentas.toArray();
+    catalogo = await db.categorias.toArray();
     const estado = await cargarEstadoCuentas(repoAjustes, cuentas);
     const cambioPredeterminada = estado.predeterminada !== cuentaPredeterminada;
     cuentaPredeterminada = estado.predeterminada;
@@ -680,6 +700,7 @@ export async function crearRegistrar(): Promise<VistaRegistrar> {
       void persistirCuenta();
     }
     pintarCuenta();
+    pintarCategorias();
     // Si Ajustes cambió la moneda predeterminada, Registrar pasa a ella (igual que con la cuenta); y lo mismo
     // si ocultó la moneda en uso. Con aviso si la nueva moneda pierde decimales.
     const monedaVigente = resolverMonedaAlActivar(sesion.moneda, config, predeterminadaPrevia);
@@ -710,6 +731,6 @@ export async function crearRegistrar(): Promise<VistaRegistrar> {
   pintarCuenta();
   pintarNota();
   pintarFoto();
-  await pintarCategorias();
+  pintarCategorias();
   return { el: root, activar };
 }

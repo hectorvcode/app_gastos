@@ -45,6 +45,11 @@ export interface Cuenta {
   emoji: string;
   orden: number;
   archivada: boolean;
+  /**
+   * Ids de las categorías que la cuenta muestra en Registrar, en su orden (máximo 12, mínimo 1).
+   * Ausente solo en datos anteriores a la Fase 7a: `lib/categorias.ts` lo completa.
+   */
+  categoriaIds?: string[];
 }
 
 export interface Ajuste {
