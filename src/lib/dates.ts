@@ -71,6 +71,9 @@ export function desplazarMes(m: Mes, delta: number): Mes {
   return mesDe(d);
 }
 
+/** "octubre" */
+export const nombreMes = (m: Mes): string => MESES_LARGOS[m.mes] ?? '';
+
 /** "octubre 2026" */
 export function etiquetaMes(m: Mes): string {
   return `${MESES_LARGOS[m.mes]} ${m.anio}`;

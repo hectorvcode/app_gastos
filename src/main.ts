@@ -6,6 +6,7 @@ import { instalarManejadorGlobal, mostrarError } from './ui/avisos';
 import { crearAjustes } from './ui/ajustes';
 import { crearHistorial } from './ui/historial';
 import { crearRegistrar } from './ui/registrar';
+import { crearResumen } from './ui/resumen';
 import { instalarNavegacion } from './ui/navegacion';
 import { instalarAjusteTeclado } from './ui/teclado';
 
@@ -41,22 +42,30 @@ async function iniciar(): Promise<void> {
   const alOcultar = new Map<string, () => void>();
   let actual = '';
 
-  const registrar = await crearRegistrar();
+  const registrar = await crearRegistrar(() => {
+    // Recordatorio de respaldo: lleva a Ajustes con la sección Respaldo abierta.
+    mostrar('ajustes');
+    ajustes.irARespaldo();
+  });
   vistas.set('registrar', registrar.el);
   alMostrar.set('registrar', registrar.activar);
   const historial = crearHistorial(() => mostrar('registrar'));
   vistas.set('historial', historial.el);
   alMostrar.set('historial', historial.activar);
   alOcultar.set('historial', historial.desactivar);
+  const resumen = crearResumen(
+    () => mostrar('registrar'),
+    (filtro) => {
+      // Tocar una categoría: Historial con ese mes, cuenta y categoría ya filtrados.
+      historial.filtrar(filtro);
+      mostrar('historial');
+    },
+  );
+  vistas.set('resumen', resumen.el);
+  alMostrar.set('resumen', resumen.activar);
   const ajustes = crearAjustes();
   vistas.set('ajustes', ajustes.el);
   alMostrar.set('ajustes', ajustes.activar);
-  for (const t of TABS.filter((x) => !vistas.has(x.id))) {
-    const v = document.createElement('section');
-    v.className = 'pronto';
-    v.textContent = `${t.nombre}: próximamente`;
-    vistas.set(t.id, v);
-  }
   contenido.append(...vistas.values());
 
   const nav = document.createElement('nav');

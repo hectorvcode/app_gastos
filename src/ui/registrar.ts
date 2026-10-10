@@ -3,6 +3,7 @@ import { avisoRecuperacion, borrarBorrador, guardarBorrador, guardarFotoPendient
 import { addDays, dayMonthLabel, shortLabel } from '../lib/dates';
 import { categoriasDeRegistrar } from '../lib/categorias';
 import { mensajeDeError } from '../lib/compat';
+import { cargarRecordatorio, cerrarRecordatorio, textoRecordatorio } from '../lib/recordatorio';
 import type { Capa } from '../lib/navegacion';
 import {
   cargarEstadoCuentas,
@@ -71,7 +72,8 @@ export interface VistaRegistrar {
   activar(): Promise<void>;
 }
 
-export async function crearRegistrar(): Promise<VistaRegistrar> {
+/** `irARespaldo`: lleva a Ajustes → Respaldo (desde el recordatorio). */
+export async function crearRegistrar(irARespaldo: () => void): Promise<VistaRegistrar> {
   let config: ConfigMonedas = await cargarConfigMonedas(repoAjustes);
   const moneda = resolverMonedaInicial(await repoAjustes.get('ultimaMoneda'), config);
   const sesion = new SesionRegistro(moneda, {
@@ -223,7 +225,45 @@ export async function crearRegistrar(): Promise<VistaRegistrar> {
   document.addEventListener('visibilitychange', alVolver);
   window.addEventListener('focus', alVolver);
 
-  root.append(chips, monto, teclado, grid, toast, avisoMoneda, hoja, selector.el);
+  // --- Recordatorio de respaldo: franja flotante sobre el espacio libre bajo el monto. No empuja nada, así que
+  // no quita lugar a las categorías ni provoca scroll.
+  const avisoRespaldo = el('div', 'aviso-respaldo');
+  avisoRespaldo.hidden = true;
+  const avisoRespaldoTexto = el('span', 'aviso-respaldo-texto');
+  const avisoRespaldoIr = el('button', 'aviso-respaldo-btn', 'Respaldar');
+  avisoRespaldoIr.type = 'button';
+  const avisoRespaldoCerrar = el('button', 'aviso-respaldo-cerrar', '✕');
+  avisoRespaldoCerrar.type = 'button';
+  avisoRespaldoCerrar.setAttribute('aria-label', 'Cerrar el recordatorio hasta mañana');
+  avisoRespaldo.append(avisoRespaldoTexto, avisoRespaldoIr, avisoRespaldoCerrar);
+  const zonaMonto = el('div', 'zona-monto');
+  zonaMonto.append(monto, avisoRespaldo);
+
+  async function actualizarRecordatorio(): Promise<void> {
+    try {
+      const r = await cargarRecordatorio(repoAjustes, () => db.gastos.count(), new Date());
+      avisoRespaldoTexto.textContent = textoRecordatorio(r.dias);
+      avisoRespaldo.hidden = !r.mostrar;
+    } catch (e) {
+      mostrarError(`No se pudo revisar el recordatorio de respaldo: ${mensajeDeError(e)}`);
+    }
+  }
+
+  avisoRespaldoIr.addEventListener('click', (e) => {
+    sinFoco(e);
+    irARespaldo();
+  });
+  avisoRespaldoCerrar.addEventListener('click', async (e) => {
+    sinFoco(e);
+    avisoRespaldo.hidden = true;
+    try {
+      await cerrarRecordatorio(repoAjustes, new Date());
+    } catch (err) {
+      mostrarError(`No se pudo recordar que cerraste el aviso: ${mensajeDeError(err)}`);
+    }
+  });
+
+  root.append(chips, zonaMonto, teclado, grid, toast, avisoMoneda, hoja, selector.el);
 
   // ---------- Pintado ----------
   function pintarFecha(): void {
@@ -706,6 +746,7 @@ export async function crearRegistrar(): Promise<VistaRegistrar> {
     const monedaVigente = resolverMonedaAlActivar(sesion.moneda, config, predeterminadaPrevia);
     if (monedaVigente !== sesion.moneda) aplicarMoneda(monedaVigente);
     else pintarMoneda();
+    await actualizarRecordatorio();
   }
 
   // Recupera el gasto en curso si la app se cerró o recargó mientras se tomaba la foto (menos de 15 min).
@@ -732,5 +773,6 @@ export async function crearRegistrar(): Promise<VistaRegistrar> {
   pintarNota();
   pintarFoto();
   pintarCategorias();
+  void actualizarRecordatorio();
   return { el: root, activar };
 }

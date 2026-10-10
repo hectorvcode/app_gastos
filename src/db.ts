@@ -3,6 +3,8 @@ import { idsIniciales, migrarCuentas, type EstadoCatalogo, type ResultadoCatalog
 import { completarCuenta, CUENTA_INICIAL, CUENTA_PERSONAL_ID } from './lib/cuentas';
 import { aplicarMarca, eliminadoDe, restaurarTrasDeshacer, type MarcaPrevia, type PlanMarca } from './lib/exportar';
 import { limpiarFotosHuerfanas } from './lib/fotos';
+import type { EntradaRespaldo } from './lib/respaldo';
+import type { EstadoLocal, RepoRestauracion } from './lib/restaurar';
 import type { Ajuste, Categoria, Cuenta, Eliminado, Foto, Gasto } from './types';
 
 export const CATEGORIAS_INICIALES: Categoria[] = [
@@ -222,6 +224,68 @@ export async function leerParaExportar(): Promise<{
     db.cuentas.toArray(),
   ]);
   return { gastos, eliminados, categorias, cuentas };
+}
+
+// ---------- Fase 7b: respaldo, restauración y almacenamiento ----------
+
+/**
+ * Lee todo lo que va en el respaldo en una sola transacción de lectura (una foto de un instante coherente),
+ * incluidos los blobs de las fotos que usan los gastos. Las fotos sin gasto (huérfanas) no se respaldan.
+ */
+export function leerParaRespaldo(): Promise<EntradaRespaldo> {
+  return db.transaction('r', [db.gastos, db.categorias, db.cuentas, db.eliminados, db.ajustes, db.fotos], async () => {
+    const [gastos, categorias, cuentas, eliminados, ajustes] = await Promise.all([
+      db.gastos.toArray(),
+      db.categorias.toArray(),
+      db.cuentas.toArray(),
+      db.eliminados.toArray(),
+      db.ajustes.toArray(),
+    ]);
+    const ids = [...new Set(gastos.map((g) => g.fotoId).filter((x): x is string => x !== null))];
+    const fotos: Foto[] = [];
+    for (let i = 0; i < ids.length; i += 50) {
+      for (const f of await db.fotos.bulkGet(ids.slice(i, i + 50))) if (f) fotos.push(f);
+    }
+    return { gastos, categorias, cuentas, eliminados, ajustes, fotos };
+  });
+}
+
+/** Lo que hay ahora en la base, para planificar la fusión de un respaldo. */
+export async function leerEstadoLocal(): Promise<EstadoLocal> {
+  const [gastos, categorias, cuentas, eliminados, ajustes, fotosIds] = await Promise.all([
+    db.gastos.toArray(),
+    db.categorias.toArray(),
+    db.cuentas.toArray(),
+    db.eliminados.toArray(),
+    db.ajustes.toArray(),
+    db.fotos.toCollection().primaryKeys(),
+  ]);
+  return { gastos, categorias, cuentas, eliminados, ajustes, fotosIds: new Set(fotosIds as string[]) };
+}
+
+/** Restauración: todas las tablas en UNA transacción; si algo lanza, Dexie la revierte y no queda nada a medias. */
+export const repoRestauracion: RepoRestauracion = {
+  transaccion: (operar) =>
+    db.transaction('rw', [db.gastos, db.fotos, db.categorias, db.cuentas, db.eliminados, db.ajustes], () =>
+      operar({
+        gastos: (f) => db.gastos.bulkPut(f).then(() => undefined),
+        fotos: (f) => db.fotos.bulkPut(f).then(() => undefined),
+        categorias: (f) => db.categorias.bulkPut(f).then(() => undefined),
+        cuentas: (f) => db.cuentas.bulkPut(f).then(() => undefined),
+        eliminados: (f) => db.eliminados.bulkPut(f).then(() => undefined),
+        ajustes: (f) => db.ajustes.bulkPut(f).then(() => undefined),
+      }),
+    ),
+};
+
+/** Cantidad de gastos y de fotos, y el peso aproximado de las fotos (suma de los blobs, sin las miniaturas). */
+export async function contarAlmacenamiento(): Promise<{ gastos: number; fotos: number; bytesFotos: number }> {
+  const [gastos, fotos] = await Promise.all([db.gastos.count(), db.fotos.count()]);
+  let bytesFotos = 0;
+  await db.fotos.each((f) => {
+    bytesFotos += f.blob.size + (f.miniatura?.size ?? 0);
+  });
+  return { gastos, fotos, bytesFotos };
 }
 
 export const repoMarcas = {

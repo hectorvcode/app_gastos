@@ -1056,3 +1056,167 @@ button {
   border-style: dashed;
   border-color: var(--muted);
 }
+
+/* ---------- Fase 7b: recordatorio de respaldo, Resumen y Respaldo ---------- */
+.zona-monto {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* Franja flotante pegada al borde inferior de la zona del monto: no ocupa lugar en la columna. */
+.aviso-respaldo {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 48px;
+  padding: 0 4px 0 12px;
+  border-radius: 12px;
+  background: var(--alerta-bg);
+  color: var(--alerta);
+  font-size: 0.9rem;
+  z-index: 1;
+}
+
+.aviso-respaldo-texto {
+  flex: 1;
+  min-width: 0;
+}
+
+.aviso-respaldo-texto::after {
+  content: ' ·';
+}
+
+.aviso-respaldo-btn,
+.aviso-respaldo-cerrar {
+  min-height: 48px;
+  border-radius: 10px;
+  background: none;
+  color: inherit;
+  font-weight: 700;
+}
+
+.aviso-respaldo-btn {
+  padding: 0 10px;
+  text-decoration: underline;
+}
+
+.aviso-respaldo-cerrar {
+  min-width: 48px;
+  font-size: 1.1rem;
+}
+
+.resumen {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+  padding-bottom: 16px;
+}
+
+.resumen-cuerpo {
+  display: grid;
+  gap: 8px;
+  padding: 8px 10px;
+}
+
+.resumen-titulo {
+  margin: 8px 0 0;
+  font-size: 1rem;
+  color: var(--muted);
+}
+
+.resumen-total {
+  display: grid;
+  gap: 2px;
+  padding: 10px 14px;
+  border-radius: 14px;
+  background: var(--surface);
+}
+
+.resumen-total-linea {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.resumen-total-monto {
+  font-size: 2rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.resumen-total-moneda {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.resumen-variacion {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+.resumen-sube {
+  color: var(--alerta);
+  font-weight: 700;
+}
+
+.resumen-baja {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.resumen-barras {
+  display: grid;
+  gap: 6px;
+}
+
+.resumen-barra {
+  display: grid;
+  gap: 6px;
+  min-height: 64px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: var(--surface);
+  text-align: left;
+}
+
+.resumen-barra-cab {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 1rem;
+}
+
+.resumen-barra-nombre {
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resumen-barra-monto {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.resumen-barra-pista {
+  display: block;
+  height: 10px;
+  border-radius: 5px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.resumen-barra-relleno {
+  display: block;
+  height: 100%;
+  border-radius: 5px;
+  background: var(--accent);
+}

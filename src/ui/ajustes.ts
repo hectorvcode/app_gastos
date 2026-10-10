@@ -53,8 +53,10 @@ import {
 import type { Capa } from '../lib/navegacion';
 import type { Categoria, Cuenta } from '../types';
 import { mostrarAviso, mostrarError } from './avisos';
+import { crearSeccionAlmacenamiento } from './almacenamiento';
 import { crearSeccionExportar } from './exportar';
 import { botonAtras, confirmarAccion, navegacion } from './navegacion';
+import { crearSeccionRespaldo } from './respaldo';
 import { cerrarTecladoConEnter } from './teclado';
 
 function el<K extends keyof HTMLElementTagNameMap>(
@@ -72,9 +74,11 @@ export interface VistaAjustes {
   el: HTMLElement;
   /** Vuelve a leer los ajustes; se llama cada vez que se abre la pestaña. */
   activar(): Promise<void>;
+  /** Deja abierta la sección "Respaldo". Se llama después de mostrar la pestaña. */
+  irARespaldo(): void;
 }
 
-/** Ajustes: secciones "Exportar", "Categorías", "Cuentas", "Monedas" y "Fotos" (almacenamiento y respaldo llegan en la Fase 7b). */
+/** Ajustes: secciones "Exportar", "Respaldo", "Categorías", "Cuentas", "Monedas", "Fotos" y "Almacenamiento". */
 export function crearAjustes(): VistaAjustes {
   let config: ConfigMonedas | null = null;
   let cuentas: Cuenta[] = [];
@@ -220,6 +224,8 @@ export function crearAjustes(): VistaAjustes {
   });
 
   const exportar = crearSeccionExportar();
+  const respaldo = crearSeccionRespaldo();
+  const almacenamiento = crearSeccionAlmacenamiento();
 
   // Secciones plegables, Exportar primero; solo una abierta a la vez.
   const cabeceras: { boton: HTMLButtonElement; cuerpo: HTMLElement }[] = [];
@@ -246,14 +252,16 @@ export function crearAjustes(): VistaAjustes {
     return grupo;
   }
 
+  // Orden: Exportar, Respaldo, Categorías, Cuentas, Monedas, Fotos, Almacenamiento.
   root.append(
     plegable('Exportar', exportar.el),
+    plegable('Respaldo', respaldo.el),
     plegable('Categorías', seccionCategorias),
     plegable('Cuentas', seccionCuentas),
     plegable('Monedas', seccion),
     plegable('Fotos', seccionFotos),
+    plegable('Almacenamiento', almacenamiento.el),
     hoja,
-    el('p', 'pronto-resto', 'Almacenamiento y respaldo: próximamente'),
   );
 
   /** Dice por qué se bloqueó una acción: en línea y en el aviso fijo de arriba (siempre a la vista). */
@@ -779,7 +787,15 @@ export function crearAjustes(): VistaAjustes {
     pintarCategorias();
     mensajeCats.textContent = '';
     await exportar.activar();
+    await respaldo.activar();
+    await almacenamiento.activar();
   }
 
-  return { el: root, activar };
+  /** Abre la sección Respaldo (la usa el recordatorio de Registrar). */
+  function irARespaldo(): void {
+    abrirSeccion(respaldo.el);
+    respaldo.el.scrollIntoView?.({ block: 'start' });
+  }
+
+  return { el: root, activar, irARespaldo };
 }

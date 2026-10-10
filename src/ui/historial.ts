@@ -59,6 +59,8 @@ export interface VistaHistorial {
   el: HTMLElement;
   /** Vuelve a leer la base de datos; se llama cada vez que se abre la pestaña. */
   activar(): Promise<void>;
+  /** Deja puestos mes, cuenta y categoría (null = todas); se llama justo antes de mostrar la pestaña (Resumen). */
+  filtrar(f: { mes: Mes; cuentaId: string | null; categoriaId: string | null }): void;
   /** Se llama al salir de la pestaña: libera las miniaturas en memoria. */
   desactivar(): void;
 }
@@ -778,6 +780,13 @@ export function crearHistorial(irARegistrar: () => void): VistaHistorial {
   return {
     el: root,
     activar: leer,
+    filtrar({ mes, cuentaId, categoriaId }) {
+      const hoy = mesDe(new Date());
+      mesElegido = mes.anio === hoy.anio && mes.mes === hoy.mes ? null : mes;
+      cuentaFiltro = cuentaId;
+      categoriaFiltro = categoriaId;
+      limite = FILAS_POR_LOTE;
+    },
     desactivar() {
       pintado++; // descarta cargas de miniaturas en curso
       liberarMiniaturas();
