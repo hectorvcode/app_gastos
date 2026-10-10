@@ -247,7 +247,62 @@ describe('conservación de exportadoEn', () => {
       { clave: 'ultimaExportacion', valor: '2026-10-09T10:00:00.000Z' },
       { clave: 'monedaPredeterminada', valor: 'COP' },
     ];
-    expect(planificarFusion(local({ ajustes: mia }), r).ajustes).toEqual([]); // lo local manda
+    expect(planificarFusion(local({ gastos: [gasto('x')], ajustes: mia }), r).ajustes).toEqual([]); // lo local manda
+  });
+});
+
+describe('ajustes al restaurar según si la base local tiene gastos', () => {
+  const prefs = {
+    monedaPredeterminada: 'USD',
+    monedasVisibles: ['USD', 'EUR'],
+    decimalCsv: 'punto',
+    modoRecibo: false,
+    ultimaCuenta: 'hogar',
+    cuentaPredeterminada: 'hogar',
+  };
+  const propios: Ajuste[] = [
+    { clave: 'monedaPredeterminada', valor: 'COP' },
+    { clave: 'monedasVisibles', valor: ['COP', 'USD', 'EUR'] },
+    { clave: 'decimalCsv', valor: 'coma' },
+    { clave: 'modoRecibo', valor: true },
+    { clave: 'ultimaCuenta', valor: 'personal' },
+    { clave: 'cuentaPredeterminada', valor: 'personal' },
+  ];
+  const r = (): DatosRespaldo =>
+    respaldo({ ajustes: prefs, cuentas: [cta('personal', 0), cta('hogar', 1)] });
+
+  it('sin gastos locales (teléfono nuevo) mandan los ajustes del respaldo', () => {
+    const p = planificarFusion(local({ ajustes: propios }), r());
+    const aplicados = Object.fromEntries(p.ajustes.map((a) => [a.clave, a.valor]));
+    expect(aplicados).toEqual({
+      monedaPredeterminada: 'USD',
+      monedasVisibles: ['USD', 'EUR'],
+      decimalCsv: 'punto',
+      modoRecibo: false,
+      ultimaCuenta: 'hogar',
+      cuentaPredeterminada: 'hogar',
+    });
+  });
+
+  it('con gastos locales mandan los ajustes locales', () => {
+    const p = planificarFusion(local({ gastos: [gasto('x')], ajustes: propios }), r());
+    expect(p.ajustes).toEqual([]);
+  });
+
+  it('sin gastos, la cuenta predeterminada se traduce si la cuenta se fusionó con otra del mismo nombre', () => {
+    const p = planificarFusion(
+      local({ ajustes: propios }),
+      respaldo({ ajustes: { cuentaPredeterminada: 'uuid-7' }, cuentas: [cta('uuid-7', 0, { nombre: 'personal' })] }),
+    );
+    expect(p.ajustes).toEqual([{ clave: 'cuentaPredeterminada', valor: 'personal' }]);
+  });
+
+  it('sin gastos, una última cuenta que no existe se ignora', () => {
+    const p = planificarFusion(
+      local({ ajustes: propios }),
+      respaldo({ ajustes: { ultimaCuenta: 'fantasma', cuentaPredeterminada: 'fantasma' }, cuentas: [cta('personal', 0)] }),
+    );
+    expect(p.ajustes).toEqual([]);
   });
 });
 

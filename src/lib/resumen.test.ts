@@ -135,7 +135,17 @@ describe('barras por categoría', () => {
 });
 
 describe('moneda por defecto de las barras', () => {
-  it('es la que tiene más gastos en el mes (no se pueden comparar montos sin convertir)', () => {
+  it('es la predeterminada si tiene gastos en el mes, aunque otra tenga más', () => {
+    const t = totalesDelMes([gasto(500000, 'COP', 'comida'), gasto(10, 'USD', 'comida'), gasto(20, 'USD', 'comida')], []);
+    expect(monedaPrincipal(t, 'COP')).toBe('COP');
+  });
+
+  it('si la predeterminada no tiene gastos en el mes, la de más gastos', () => {
+    const t = totalesDelMes([gasto(10, 'USD', 'comida'), gasto(20, 'USD', 'comida'), gasto(5, 'EUR', 'comida')], []);
+    expect(monedaPrincipal(t, 'COP')).toBe('USD');
+  });
+
+  it('sin predeterminada gana la que tiene más gastos (no se pueden comparar montos sin convertir)', () => {
     const t = totalesDelMes(
       [gasto(500000, 'COP', 'comida'), gasto(10, 'USD', 'comida'), gasto(20, 'USD', 'comida'), gasto(30, 'USD', 'comida')],
       [],

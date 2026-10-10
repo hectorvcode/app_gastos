@@ -1,4 +1,5 @@
-import { db } from '../db';
+import { db, repoAjustes } from '../db';
+import { cargarConfigMonedas } from '../lib/monedas';
 import { mensajeDeError } from '../lib/compat';
 import { etiquetaCuenta, ordenadas } from '../lib/cuentas';
 import { desplazarMes, etiquetaMes, mesDe, nombreMes, rangoMes, type Mes } from '../lib/dates';
@@ -40,6 +41,7 @@ export function crearResumen(
   let mesElegido: Mes | null = null; // null = mes actual
   let cuentaFiltro: string | null = null;
   let monedaElegida: string | null = null; // null = la principal del mes
+  let monedaPredeterminada = '';
   let categorias: Categoria[] = [];
   let cuentas: Cuenta[] = [];
   let gastosMes: Gasto[] = [];
@@ -74,13 +76,15 @@ export function crearResumen(
       const mes = mesActual();
       const a = rangoMes(mes);
       const p = rangoMes(desplazarMes(mes, -1));
-      const [cats, cts, actual, previo] = await Promise.all([
+      const [config, cats, cts, actual, previo] = await Promise.all([
+        cargarConfigMonedas(repoAjustes),
         db.categorias.toArray(),
         db.cuentas.toArray(),
         db.gastos.where('fecha').between(a.desde, a.hasta, true, false).toArray(),
         db.gastos.where('fecha').between(p.desde, p.hasta, true, false).toArray(),
       ]);
       if (mi !== lectura) return; // llegó una lectura más nueva
+      monedaPredeterminada = config.predeterminada;
       categorias = cats;
       cuentas = cts;
       if (cuentaFiltro !== null && !cuentas.some((c) => c.id === cuentaFiltro)) cuentaFiltro = null;
@@ -116,7 +120,7 @@ export function crearResumen(
     }
     const totales = totalesDelMes(mes, anterior);
     if (monedaElegida === null || !totales.some((t) => t.moneda === monedaElegida)) monedaElegida = null;
-    const moneda = monedaElegida ?? monedaPrincipal(totales) ?? totales[0]!.moneda;
+    const moneda = monedaElegida ?? monedaPrincipal(totales, monedaPredeterminada) ?? totales[0]!.moneda;
     const nombreAnterior = nombreMes(desplazarMes(mesActual(), -1));
 
     const partes: HTMLElement[] = [el('h2', 'resumen-titulo', 'Total del mes'), ...totales.map((t) => tarjetaTotal(t, nombreAnterior))];

@@ -38,6 +38,16 @@ export interface PlanRestauracion {
   ajustes: Ajuste[];
 }
 
+/** Preferencias que el respaldo impone cuando aquí no hay gastos todavía. */
+const AJUSTES_DE_PREFERENCIAS = new Set([
+  'monedaPredeterminada',
+  'monedasVisibles',
+  'decimalCsv',
+  'modoRecibo',
+  'ultimaCuenta',
+  'cuentaPredeterminada',
+]);
+
 const claveNombre = (nombre: string): string => nombre.trim().replace(/\s+/g, ' ').toLocaleLowerCase('es');
 
 /** Versión de un gasto: cuándo se editó por última vez (o se creó, si nunca se editó). */
@@ -155,13 +165,23 @@ export function planificarFusion(local: EstadoLocal, datos: DatosRespaldo): Plan
     (e) => !eliminadoLocal.has(e.id) && !gastoLocal.has(e.id) && !idsDelRespaldo.has(e.id),
   );
 
-  // ---- Ajustes: lo local manda; solo se agrega lo que falta (y la última exportación, si es más reciente) ----
+  // ---- Ajustes: con la base local sin gastos (teléfono nuevo o datos borrados) mandan los del respaldo; con
+  // gastos, lo local manda y solo se agrega lo que falta (y la última exportación, si es más reciente) ----
+  const baseVacia = local.gastos.length === 0;
   const ajustesLocales = new Map(local.ajustes.map((a) => [a.clave, a.valor]));
   const ajustes: Ajuste[] = [];
-  for (const [clave, valor] of Object.entries(datos.ajustes)) {
+  for (const [clave, valorOriginal] of Object.entries(datos.ajustes)) {
     if (!esAjusteRespaldable(clave)) continue;
+    let valor = valorOriginal;
     const propio = ajustesLocales.get(clave);
-    if (clave === 'ultimaExportacion') {
+    if (baseVacia && AJUSTES_DE_PREFERENCIAS.has(clave)) {
+      if (clave === 'ultimaCuenta' || clave === 'cuentaPredeterminada') {
+        // La cuenta puede haberse tomado como otra del mismo nombre; si ya no existe, se deja la local.
+        valor = typeof valor === 'string' ? (mapaCuentas.get(valor) ?? valor) : valor;
+        if (typeof valor !== 'string' || !cuentasFinales.has(valor)) continue;
+      }
+      ajustes.push({ clave, valor });
+    } else if (clave === 'ultimaExportacion') {
       const mia = typeof propio === 'string' ? propio : null;
       const suya = typeof valor === 'string' ? valor : null;
       const gana = masTarde(mia, suya);

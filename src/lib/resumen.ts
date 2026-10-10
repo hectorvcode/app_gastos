@@ -47,10 +47,11 @@ export function totalesDelMes(mes: readonly Gasto[], anterior: readonly Gasto[])
 }
 
 /**
- * Moneda que se grafica por defecto. No se pueden comparar montos de monedas distintas sin convertir
- * (1.000 COP no son 1.000 USD), así que gana la que tiene más gastos en el mes; si empatan, la de mayor total.
+ * Moneda que se grafica por defecto: la predeterminada si tiene gastos en el mes; si no, la que tiene más gastos
+ * (no se pueden comparar montos de monedas distintas sin convertir), y a igual cantidad la de mayor total.
  */
-export function monedaPrincipal(totales: readonly TotalMes[]): string | null {
+export function monedaPrincipal(totales: readonly TotalMes[], predeterminada?: string): string | null {
+  if (predeterminada && totales.some((t) => t.moneda === predeterminada)) return predeterminada;
   let mejor: TotalMes | null = null;
   for (const t of totales) {
     if (!mejor || t.cantidad > mejor.cantidad || (t.cantidad === mejor.cantidad && t.total > mejor.total)) mejor = t;
