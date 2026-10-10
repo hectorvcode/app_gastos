@@ -23,6 +23,7 @@ import {
 } from '../lib/categorias';
 import { generarUuid, mensajeDeError } from '../lib/compat';
 import { modoReciboActivo } from '../lib/fotos';
+import { guardadoRapidoActivo } from '../lib/registro';
 import {
   archivarCuenta,
   borrarCuenta,
@@ -196,6 +197,41 @@ export function crearAjustes(): VistaAjustes {
     pintarModoRecibo();
   });
 
+  // ---------- Sección Registro (Fase 8) ----------
+  const seccionRegistro = el('div', 'ajustes-seccion');
+  const btnGuardadoRapido = el('button', 'cat-op fila-interruptor');
+  btnGuardadoRapido.type = 'button';
+  btnGuardadoRapido.setAttribute('role', 'switch');
+  seccionRegistro.append(
+    el(
+      'p',
+      'hoja-ayuda',
+      'Guardado rápido al tocar la categoría: al activarlo, tocar una categoría guarda el gasto al instante y el botón Guardar de Registrar se oculta. Desactivado (por defecto), tocar una categoría solo la selecciona y el gasto se guarda con el botón Guardar.',
+    ),
+    btnGuardadoRapido,
+  );
+  let guardadoRapido = false;
+
+  function pintarGuardadoRapido(): void {
+    btnGuardadoRapido.textContent = guardadoRapido
+      ? 'Guardado rápido al tocar la categoría: activado'
+      : 'Guardado rápido al tocar la categoría: desactivado';
+    btnGuardadoRapido.setAttribute('aria-checked', String(guardadoRapido));
+    btnGuardadoRapido.setAttribute('aria-pressed', String(guardadoRapido));
+  }
+
+  btnGuardadoRapido.addEventListener('click', async () => {
+    const nuevo = !guardadoRapido;
+    try {
+      await repoAjustes.set('guardadoRapido', nuevo);
+    } catch (e) {
+      mostrarError(`No se pudo guardar el ajuste de guardado rápido: ${mensajeDeError(e)}`);
+      return;
+    }
+    guardadoRapido = nuevo;
+    pintarGuardadoRapido();
+  });
+
   const hoja = el('div', 'hoja');
   hoja.hidden = true;
   const hojaPanel = el('div', 'hoja-panel');
@@ -252,13 +288,14 @@ export function crearAjustes(): VistaAjustes {
     return grupo;
   }
 
-  // Orden: Exportar, Respaldo, Categorías, Cuentas, Monedas, Fotos, Almacenamiento.
+  // Orden: Exportar, Respaldo, Categorías, Cuentas, Monedas, Registro, Fotos, Almacenamiento.
   root.append(
     plegable('Exportar', exportar.el),
     plegable('Respaldo', respaldo.el),
     plegable('Categorías', seccionCategorias),
     plegable('Cuentas', seccionCuentas),
     plegable('Monedas', seccion),
+    plegable('Registro', seccionRegistro),
     plegable('Fotos', seccionFotos),
     plegable('Almacenamiento', almacenamiento.el),
     hoja,
@@ -781,6 +818,8 @@ export function crearAjustes(): VistaAjustes {
     pintar();
     modoRecibo = modoReciboActivo(await repoAjustes.get('modoRecibo'));
     pintarModoRecibo();
+    guardadoRapido = guardadoRapidoActivo(await repoAjustes.get('guardadoRapido'));
+    pintarGuardadoRapido();
     await leerCategorias();
     await leerCuentas();
     cuentaCats = (await cargarEstadoCuentas(repoAjustes, cuentas)).actual; // empieza en la cuenta actual de Registrar

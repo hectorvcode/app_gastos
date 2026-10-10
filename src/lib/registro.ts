@@ -4,7 +4,7 @@ import { CUENTA_PERSONAL_ID } from './cuentas';
 import { addDays, buildFechaIso, dateKey } from './dates';
 import type { InstantaneaRegistro } from './borrador';
 import { fotoDesdeProcesada, type FotoProcesada } from './fotos';
-import { adaptarEntry, applyKey, entryToNumber, type Key } from './money';
+import { adaptarEntry, applyKey, entryToNumber, formatMonto, type Key } from './money';
 import { recortarNota } from './nota';
 
 export const REINICIO_FECHA_MS = 10 * 60 * 1000;
@@ -27,6 +27,25 @@ export type ResultadoGuardado =
   | { ok: false }
   | { ok: true; gasto: Gasto; fechaKey: string; esHoy: boolean };
 
+export const MSG_FALTA_MONTO = 'Escribe el monto';
+export const MSG_FALTA_CATEGORIA = 'Elige una categoría';
+
+/** Qué le falta al gasto en curso para poder guardarse con el botón Guardar (o con Enter). */
+export type Falta = { falta: 'monto' | 'categoria'; mensaje: string };
+
+/** "Guardado rápido" (Ajustes): solo se activa con `true`; por defecto, desactivado. */
+export const guardadoRapidoActivo = (valor: unknown): boolean => valor === true;
+
+/**
+ * Texto del botón Guardar: resume lo que se guardará ("Guardar 45.000 COP · Comida").
+ * Con monto 0 o sin categoría muestra solo lo que ya hay.
+ */
+export function textoBotonGuardar(entry: string, moneda: string, nombreCategoria: string | null): string {
+  const monto = entryToNumber(entry);
+  const parteMonto = monto > 0 ? ` ${formatMonto(monto, moneda)} ${moneda}` : '';
+  return `Guardar${parteMonto}${nombreCategoria ? ` · ${nombreCategoria}` : ''}`;
+}
+
 /**
  * Estado de la pantalla Registrar (monto en curso, fecha elegida, último gasto),
  * sin DOM, para poder probarlo.
@@ -39,6 +58,10 @@ export class SesionRegistro {
   foto: FotoProcesada | null = null;
   /** Cuenta en la que se guarda el siguiente gasto; la fija la UI al abrir y al elegir. */
   cuentaId: string = CUENTA_PERSONAL_ID;
+  /** Categoría seleccionada para el siguiente gasto (Fase 8); null = ninguna. */
+  categoriaId: string | null = null;
+  /** Ajustes → "Guardado rápido": tocar una categoría guarda al instante y no hay selección. */
+  guardadoRapido = false;
   /** null = "Hoy" (sigue al reloj, incluso pasada la medianoche). */
   private fechaElegida: string | null = null;
   private ultimaActividad: number;
@@ -95,15 +118,22 @@ export class SesionRegistro {
       moneda: this.moneda,
       fecha: fecha === this.hoy ? null : fecha,
       cuentaId: this.cuentaId,
+      categoriaId: this.categoriaId,
       nota: this.nota,
     };
   }
 
   /**
    * Vuelve a poner lo escrito. Ignora la moneda o la cuenta que ya no estén disponibles
-   * (se queda con las actuales) y no admite fechas futuras.
+   * (se queda con las actuales) y no admite fechas futuras. La categoría solo vuelve si la
+   * cuenta resultante todavía la muestra (`categoriasVisibles` da los ids de esa cuenta).
    */
-  restaurar(s: InstantaneaRegistro, monedasVisibles: readonly string[], cuentasActivas: readonly string[]): void {
+  restaurar(
+    s: InstantaneaRegistro,
+    monedasVisibles: readonly string[],
+    cuentasActivas: readonly string[],
+    categoriasVisibles: (cuentaId: string) => readonly string[] = () => [],
+  ): void {
     if (monedasVisibles.includes(s.moneda)) {
       this.moneda = s.moneda;
       this.entry = s.entry;
@@ -113,6 +143,73 @@ export class SesionRegistro {
     if (cuentasActivas.includes(s.cuentaId)) this.cuentaId = s.cuentaId;
     if (s.fecha) this.elegirFecha(s.fecha);
     this.ponerNota(s.nota);
+    this.categoriaId =
+      !this.guardadoRapido && s.categoriaId && categoriasVisibles(this.cuentaId).includes(s.categoriaId)
+        ? s.categoriaId
+        : null;
+  }
+
+  // ---------- Selección de categoría (Fase 8) ----------
+
+  /**
+   * Toque en una categoría. Con guardado rápido guarda al instante (monto 0 → `{ ok: false }`);
+   * si no, la selecciona, cambia la selección o, si era la misma, la quita, y devuelve null.
+   */
+  async tocarCategoria(id: string): Promise<ResultadoGuardado | null> {
+    if (this.guardadoRapido) return this.guardar(id);
+    this.categoriaId = this.categoriaId === id ? null : id;
+    return null;
+  }
+
+  /** Quita la selección (Escape). Devuelve true si había una. */
+  deseleccionar(): boolean {
+    const habia = this.categoriaId !== null;
+    this.categoriaId = null;
+    return habia;
+  }
+
+  /**
+   * Cambia de cuenta. Si la categoría seleccionada no está entre las visibles de la nueva
+   * cuenta, se deselecciona; devuelve su id para que la pantalla lo avise.
+   */
+  cambiarCuenta(cuentaId: string, categoriasVisibles: readonly string[]): string | null {
+    this.cuentaId = cuentaId;
+    return this.quitarSiNoVisible(categoriasVisibles);
+  }
+
+  /** Deselecciona la categoría si ya no está entre `categoriasVisibles`; devuelve la que quitó. */
+  quitarSiNoVisible(categoriasVisibles: readonly string[]): string | null {
+    const id = this.categoriaId;
+    if (id === null || categoriasVisibles.includes(id)) return null;
+    this.categoriaId = null;
+    return id;
+  }
+
+  /** Lo que falta para guardar con el botón o con Enter; null si ya se puede. El monto va primero. */
+  faltante(): Falta | null {
+    if (entryToNumber(this.entry) <= 0) return { falta: 'monto', mensaje: MSG_FALTA_MONTO };
+    if (this.categoriaId === null) return { falta: 'categoria', mensaje: MSG_FALTA_CATEGORIA };
+    return null;
+  }
+
+  /**
+   * Guarda con la categoría seleccionada (botón Guardar o Enter). Al guardar, el monto y la
+   * selección se limpian al instante (antes de esperar a la base de datos), así que un segundo
+   * toque inmediato no crea otro gasto. Si falta algo no guarda (`{ ok: false }`); si falla,
+   * la selección vuelve junto con el monto, la nota y la foto.
+   */
+  async guardarSeleccion(): Promise<ResultadoGuardado> {
+    const categoria = this.categoriaId;
+    if (categoria === null || this.faltante()) return { ok: false };
+    this.categoriaId = null;
+    try {
+      const r = await this.guardar(categoria);
+      if (!r.ok && this.categoriaId === null) this.categoriaId = categoria;
+      return r;
+    } catch (e) {
+      if (this.categoriaId === null) this.categoriaId = categoria;
+      throw e;
+    }
   }
 
   /**
@@ -197,23 +294,33 @@ export class SesionRegistro {
   }
 }
 
+/** Qué hizo (o debe hacer la pantalla con) una tecla física en Registrar. */
+export type AccionTecla =
+  | 'monto' // dígito, decimal o Backspace: ya se aplicó, la pantalla repinta el monto
+  | 'guardar' // Enter: la pantalla ejecuta Guardar (o dice qué falta)
+  | 'deseleccionar' // Escape con una categoría seleccionada: ya se quitó
+  | 'ignorada'; // consumida sin efecto (Enter con guardado rápido)
+
 /**
- * Teclado físico en Registrar: dígitos, punto/coma decimal y Backspace.
- * Enter se consume sin hacer nada: guardar exige tocar una categoría.
- * Devuelve true si la tecla se consumió.
+ * Teclado físico en Registrar: dígitos, punto/coma decimal y Backspace aplican al monto;
+ * Enter guarda (como el botón Guardar) y Escape quita la categoría seleccionada. Con guardado
+ * rápido Enter se ignora: guardar exige tocar una categoría. Devuelve null si la tecla no se
+ * consume (la pantalla no debe llamar a `preventDefault`).
  */
-export function aplicarTeclaFisica(sesion: SesionRegistro, tecla: string): boolean {
+export function aplicarTeclaFisica(sesion: SesionRegistro, tecla: string): AccionTecla | null {
   if (/^[0-9]$/.test(tecla)) {
     sesion.pulsar(tecla as Key);
-    return true;
+    return 'monto';
   }
   if (tecla === '.' || tecla === ',') {
     sesion.pulsar('.');
-    return true;
+    return 'monto';
   }
   if (tecla === 'Backspace') {
     sesion.pulsar('back');
-    return true;
+    return 'monto';
   }
-  return tecla === 'Enter';
+  if (tecla === 'Enter') return sesion.guardadoRapido ? 'ignorada' : 'guardar';
+  if (tecla === 'Escape') return sesion.deseleccionar() ? 'deseleccionar' : null;
+  return null;
 }

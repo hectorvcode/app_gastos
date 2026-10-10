@@ -25,7 +25,15 @@ import {
 } from '../lib/monedas';
 import { ErrorFoto, mensajeErrorAlmacenamiento, textoInfoFoto, type FotoProcesada } from '../lib/fotos';
 import { MAX_NOTA } from '../lib/nota';
-import { aplicarTeclaFisica, SesionRegistro, type CambioMoneda } from '../lib/registro';
+import {
+  aplicarTeclaFisica,
+  guardadoRapidoActivo,
+  SesionRegistro,
+  textoBotonGuardar,
+  type CambioMoneda,
+  type Falta,
+  type ResultadoGuardado,
+} from '../lib/registro';
 import type { Categoria, Cuenta } from '../types';
 import { mostrarAviso, mostrarError } from './avisos';
 import { botonAtras, navegacion } from './navegacion';
@@ -34,6 +42,8 @@ import { cerrarTecladoConEnter } from './teclado';
 import { abrirVisor } from './visor';
 
 const DESHACER_MS = 5000;
+const FALTA_MS = 2200;
+const AVISO_SELECCION_MS = 3500;
 
 const TECLAS: { key: Key; label: string; aria?: string }[] = [
   { key: '1', label: '1' },
@@ -85,7 +95,11 @@ export async function crearRegistrar(irARespaldo: () => void): Promise<VistaRegi
   const estadoCuentas = await cargarEstadoCuentas(repoAjustes, cuentas);
   let cuentaPredeterminada = estadoCuentas.predeterminada;
   sesion.cuentaId = estadoCuentas.actual;
+  sesion.guardadoRapido = guardadoRapidoActivo(await repoAjustes.get('guardadoRapido'));
   let toastTimer: number | undefined;
+  let enCurso = false; // un guardado en marcha (incluida la espera de la foto): los toques nuevos se ignoran
+  let faltaTimer: number | undefined;
+  let avisoSeleccionTimer: number | undefined;
 
   const root = el('section', 'registrar');
 
@@ -131,6 +145,21 @@ export async function crearRegistrar(irARespaldo: () => void): Promise<VistaRegi
 
   // --- Categorías ---
   const grid = el('div', 'categorias');
+
+  // --- Botón Guardar (Fase 8): fijo justo encima de la barra inferior; oculto con el guardado rápido ---
+  // Nunca lleva `disabled`: sin datos se ve apagado (aria-disabled), pero al tocarlo explica qué falta.
+  const guardarBtn = el('button', 'btn-guardar');
+  guardarBtn.type = 'button';
+  guardarBtn.setAttribute('aria-live', 'polite');
+  guardarBtn.addEventListener('click', (e) => {
+    sinFoco(e);
+    void intentarGuardar();
+  });
+
+  // --- Aviso breve cuando se quita la categoría seleccionada ---
+  const avisoSeleccion = el('div', 'toast toast-breve');
+  avisoSeleccion.hidden = true;
+  avisoSeleccion.setAttribute('role', 'status');
 
   // --- Aviso "Guardado · Deshacer" ---
   const toast = el('div', 'toast');
@@ -263,7 +292,7 @@ export async function crearRegistrar(irARespaldo: () => void): Promise<VistaRegi
     }
   });
 
-  root.append(chips, zonaMonto, teclado, grid, toast, avisoMoneda, hoja, selector.el);
+  root.append(chips, zonaMonto, teclado, grid, guardarBtn, toast, avisoMoneda, avisoSeleccion, hoja, selector.el);
 
   // ---------- Pintado ----------
   function pintarFecha(): void {
@@ -333,6 +362,44 @@ export async function crearRegistrar(irARespaldo: () => void): Promise<VistaRegi
     montoValor.textContent = partes.escrito;
     montoRelleno.textContent = partes.relleno;
     monto.classList.toggle('vacio', entryToNumber(sesion.entry) === 0);
+    pintarGuardar();
+  }
+
+  const nombreCategoria = (id: string | null): string | null =>
+    id === null ? null : (catalogo.find((c) => c.id === id)?.nombre ?? null);
+
+  /** Texto y aspecto del botón Guardar; cualquier cambio de monto o selección borra el mensaje de "falta". */
+  function pintarGuardar(): void {
+    window.clearTimeout(faltaTimer);
+    guardarBtn.hidden = sesion.guardadoRapido;
+    root.classList.toggle('con-guardar', !sesion.guardadoRapido);
+    guardarBtn.textContent = textoBotonGuardar(sesion.entry, sesion.moneda, nombreCategoria(sesion.categoriaId));
+    guardarBtn.classList.remove('falta');
+    guardarBtn.setAttribute('aria-disabled', String(sesion.faltante() !== null));
+  }
+
+  /** Marca la categoría seleccionada y atenúa las demás. */
+  function pintarSeleccion(): void {
+    const id = sesion.categoriaId;
+    grid.classList.toggle('hay-seleccion', id !== null);
+    for (const b of grid.querySelectorAll<HTMLButtonElement>('.cat')) {
+      b.setAttribute('aria-pressed', String(b.dataset.id === id));
+    }
+    pintarGuardar();
+  }
+
+  /** Dice qué falta en el propio botón (y lo señala), sin guardar nada. */
+  function mostrarFalta(f: Falta): void {
+    if (f.falta === 'monto') vibrarMonto();
+    else {
+      grid.classList.remove('pide');
+      void grid.offsetWidth;
+      grid.classList.add('pide');
+    }
+    window.clearTimeout(faltaTimer);
+    guardarBtn.textContent = f.mensaje;
+    guardarBtn.classList.add('falta');
+    faltaTimer = window.setTimeout(pintarGuardar, FALTA_MS);
   }
 
   function vibrarMonto(): void {
@@ -362,20 +429,39 @@ export async function crearRegistrar(irARespaldo: () => void): Promise<VistaRegi
     }
   });
 
-  async function guardar(cat: Categoria): Promise<void> {
+  /** Botón Guardar o Enter: guarda la categoría seleccionada, o dice qué falta. */
+  async function intentarGuardar(): Promise<void> {
+    if (enCurso) return;
+    const falta = sesion.faltante();
+    if (falta) {
+      mostrarFalta(falta);
+      return;
+    }
+    await ejecutarGuardado(() => sesion.guardarSeleccion(), 'Toca Guardar otra vez para guardarlo sin foto.');
+  }
+
+  /** Guardado rápido: tocar la categoría guarda al instante (con monto 0, el monto vibra). */
+  async function guardarRapido(cat: Categoria): Promise<void> {
+    if (enCurso) return;
     if (entryToNumber(sesion.entry) <= 0) {
       vibrarMonto();
       return;
     }
-    if (procesando && !(await procesando)) {
-      mostrarError('El gasto no se guardó porque la foto no se pudo procesar. Toca la categoría otra vez para guardarlo sin foto.');
-      return;
-    }
+    await ejecutarGuardado(() => sesion.guardar(cat.id), 'Toca la categoría otra vez para guardarlo sin foto.');
+  }
+
+  async function ejecutarGuardado(guardar: () => Promise<ResultadoGuardado>, reintento: string): Promise<void> {
+    enCurso = true;
     try {
-      const promesa = sesion.guardar(cat.id);
-      pintarMonto(); // el monto ya se limpió; la base de datos termina en segundo plano
+      if (procesando && !(await procesando)) {
+        mostrarError(`El gasto no se guardó porque la foto no se pudo procesar. ${reintento}`);
+        return;
+      }
+      const promesa = guardar();
+      pintarMonto(); // el monto y la selección ya se limpiaron; la base de datos termina en segundo plano
       pintarNota();
       pintarFoto();
+      pintarSeleccion();
       const r = await promesa;
       if (!r.ok) return;
       void sincronizarBorrador(); // ya no hay foto pendiente: se borra el borrador
@@ -388,11 +474,38 @@ export async function crearRegistrar(irARespaldo: () => void): Promise<VistaRegi
         ),
       );
     } catch (e) {
-      pintarMonto(); // la sesión conserva el monto, la nota y la foto escritos
+      // la sesión conserva el monto, la nota, la foto y la categoría seleccionada
+      pintarMonto();
       pintarNota();
       pintarFoto();
+      pintarSeleccion();
       mostrarError(`No se pudo guardar: ${mensajeErrorAlmacenamiento(e)}`);
+    } finally {
+      enCurso = false;
     }
+  }
+
+  const idsVisibles = (cuentaId: string): string[] => categoriasDeRegistrar(cuentas, cuentaId, catalogo).map((c) => c.id);
+
+  /** Aviso breve (sin acciones) de que se quitó la categoría seleccionada. */
+  function avisarSeleccionQuitada(categoriaId: string): void {
+    const cuenta = cuentas.find((x) => x.id === sesion.cuentaId);
+    const nombre = nombreCategoria(categoriaId) ?? 'La categoría';
+    window.clearTimeout(avisoSeleccionTimer);
+    avisoSeleccion.textContent = `${nombre} no está en ${cuenta?.nombre ?? 'esta cuenta'}: se quitó la selección`;
+    avisoSeleccion.hidden = false;
+    avisoSeleccionTimer = window.setTimeout(() => (avisoSeleccion.hidden = true), AVISO_SELECCION_MS);
+  }
+
+  /** Toque en una categoría: selecciona (o cambia, o quita) o, con guardado rápido, guarda. */
+  async function tocarCategoria(c: Categoria): Promise<void> {
+    if (sesion.guardadoRapido) {
+      await guardarRapido(c);
+      return;
+    }
+    await sesion.tocarCategoria(c.id);
+    pintarSeleccion();
+    programarBorrador();
   }
 
   /** Las categorías visibles de la cuenta actual, en su orden. Se repinta al instante al cambiar de cuenta. */
@@ -402,14 +515,16 @@ export async function crearRegistrar(irARespaldo: () => void): Promise<VistaRegi
       ...cats.map((c) => {
         const b = el('button', 'cat');
         b.type = 'button';
+        b.dataset.id = c.id;
         b.append(el('span', 'cat-emoji', c.emoji), el('span', 'cat-nombre', c.nombre));
         b.addEventListener('click', (e) => {
           sinFoco(e);
-          void guardar(c);
+          void tocarCategoria(c);
         });
         return b;
       }),
     );
+    pintarSeleccion();
   }
 
   // ---------- Selector de fecha ----------
@@ -468,8 +583,11 @@ export async function crearRegistrar(irARespaldo: () => void): Promise<VistaRegi
       sesion.elegirFecha(input.value);
       cerrarHoja();
     });
-    const otra = el('button', 'hoja-op', 'Elegir fecha…');
+    // Si la fecha elegida no es Hoy, Ayer ni Antier, el chip puede recortarla: aquí se ve completa.
+    const personalizada = !opciones.some(([, dias]) => addDays(h, -dias) === actual);
+    const otra = el('button', 'hoja-op', personalizada ? `Elegir fecha… · ${shortLabel(actual)} (${dayMonthLabel(actual)})` : 'Elegir fecha…');
     otra.type = 'button';
+    otra.classList.toggle('activa', personalizada);
     otra.addEventListener('click', () => {
       try {
         input.showPicker();
@@ -572,9 +690,13 @@ export async function crearRegistrar(irARespaldo: () => void): Promise<VistaRegi
       b.type = 'button';
       b.classList.toggle('activa', c.id === sesion.cuentaId);
       b.addEventListener('click', () => {
-        sesion.cuentaId = c.id;
+        const quitada = sesion.cambiarCuenta(c.id, idsVisibles(c.id));
         void persistirCuenta();
         pintarCategorias();
+        if (quitada) {
+          avisarSeleccionQuitada(quitada);
+          programarBorrador();
+        }
         cerrarHoja();
       });
       return b;
@@ -710,10 +832,17 @@ export async function crearRegistrar(irARespaldo: () => void): Promise<VistaRegi
     if (root.hidden || !hoja.hidden) return;
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     if (e.target instanceof HTMLInputElement) return;
-    if (aplicarTeclaFisica(sesion, e.key)) {
-      e.preventDefault(); // también evita que Enter active un botón con foco
+    const accion = aplicarTeclaFisica(sesion, e.key);
+    if (accion === null) return;
+    e.preventDefault(); // también evita que Enter active un botón con foco
+    if (accion === 'monto') {
       pintarMonto();
       programarBorrador();
+    } else if (accion === 'deseleccionar') {
+      pintarSeleccion();
+      programarBorrador();
+    } else if (accion === 'guardar' && !e.repeat) {
+      void intentarGuardar(); // igual que el botón: guarda o dice qué falta
     }
   });
 
@@ -740,7 +869,13 @@ export async function crearRegistrar(irARespaldo: () => void): Promise<VistaRegi
       void persistirCuenta();
     }
     pintarCuenta();
+    // Guardado rápido (Ajustes): sin selección; el botón Guardar se oculta.
+    sesion.guardadoRapido = guardadoRapidoActivo(await repoAjustes.get('guardadoRapido'));
+    if (sesion.guardadoRapido) sesion.deseleccionar();
+    // Si Ajustes ocultó la categoría seleccionada (o archivó la cuenta), se quita con aviso.
+    const quitada = sesion.quitarSiNoVisible(idsVisibles(sesion.cuentaId));
     pintarCategorias();
+    if (quitada) avisarSeleccionQuitada(quitada);
     // Si Ajustes cambió la moneda predeterminada, Registrar pasa a ella (igual que con la cuenta); y lo mismo
     // si ocultó la moneda en uso. Con aviso si la nueva moneda pierde decimales.
     const monedaVigente = resolverMonedaAlActivar(sesion.moneda, config, predeterminadaPrevia);
@@ -753,7 +888,7 @@ export async function crearRegistrar(irARespaldo: () => void): Promise<VistaRegi
   try {
     const rec = await leerBorrador(repoBorrador, Date.now());
     if (rec) {
-      sesion.restaurar(rec.borrador, config.visibles, cuentasActivas(cuentas).map((c) => c.id));
+      sesion.restaurar(rec.borrador, config.visibles, cuentasActivas(cuentas).map((c) => c.id), idsVisibles);
       if (rec.foto) {
         sesion.ponerFoto(rec.foto);
         fotoPersistida = rec.foto;

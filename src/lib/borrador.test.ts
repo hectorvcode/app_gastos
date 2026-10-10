@@ -26,7 +26,7 @@ function repoEnMemoria() {
   return { datos, repo };
 }
 
-const snap: InstantaneaRegistro = { entry: '45000', moneda: 'COP', fecha: '2026-10-05', cuentaId: 'hogar', nota: 'Almuerzo' };
+const snap: InstantaneaRegistro = { entry: '45000', moneda: 'COP', fecha: '2026-10-05', cuentaId: 'hogar', categoriaId: 'comida', nota: 'Almuerzo' };
 const T0 = Date.UTC(2026, 9, 8, 15, 0, 0);
 const foto = (): FotoProcesada => ({ blob: new Blob([new Uint8Array(50)]), miniatura: new Blob([new Uint8Array(5)]), ancho: 1000, alto: 4000, diag: 'EXIF 6 · app' });
 
@@ -116,10 +116,22 @@ describe('SesionRegistro: instantánea y restauración', () => {
   const crear = () =>
     new SesionRegistro('COP', { add: async () => {}, delete: async () => {} }, () => new Date(2026, 9, 8, 10, 0), () => 'id');
 
-  it('restaura monto, moneda, fecha elegida, cuenta y nota', () => {
+  it('restaura monto, moneda, fecha elegida, cuenta, categoría y nota', () => {
     const s = crear();
-    s.restaurar({ entry: '12.5', moneda: 'USD', fecha: '2026-10-05', cuentaId: 'hogar', nota: 'Taxi' }, ['COP', 'USD'], ['personal', 'hogar']);
-    expect(s.instantanea()).toEqual({ entry: '12.5', moneda: 'USD', fecha: '2026-10-05', cuentaId: 'hogar', nota: 'Taxi' });
+    s.restaurar(
+      { entry: '12.5', moneda: 'USD', fecha: '2026-10-05', cuentaId: 'hogar', categoriaId: 'transporte', nota: 'Taxi' },
+      ['COP', 'USD'],
+      ['personal', 'hogar'],
+      () => ['comida', 'transporte'],
+    );
+    expect(s.instantanea()).toEqual({
+      entry: '12.5',
+      moneda: 'USD',
+      fecha: '2026-10-05',
+      cuentaId: 'hogar',
+      categoriaId: 'transporte',
+      nota: 'Taxi',
+    });
   });
   it('"Hoy" se guarda como fecha null', () => {
     const s = crear();
@@ -128,7 +140,7 @@ describe('SesionRegistro: instantánea y restauración', () => {
   });
   it('ignora una moneda oculta o una cuenta que ya no existe, y no admite fechas futuras', () => {
     const s = crear();
-    s.restaurar({ entry: '12.75', moneda: 'EUR', fecha: '2027-01-01', cuentaId: 'borrada', nota: '' }, ['COP', 'USD'], ['personal']);
+    s.restaurar({ entry: '12.75', moneda: 'EUR', fecha: '2027-01-01', cuentaId: 'borrada', categoriaId: null, nota: '' }, ['COP', 'USD'], ['personal']);
     expect(s.moneda).toBe('COP');
     expect(s.entry).toBe('12'); // COP no admite decimales
     expect(s.cuentaId).toBe('personal');

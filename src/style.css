@@ -1220,3 +1220,191 @@ button {
   border-radius: 5px;
   background: var(--accent);
 }
+
+/* ---------- Fase 8: categoría seleccionada y botón Guardar ---------- */
+.cat[aria-pressed='true'] {
+  position: relative;
+  outline: 4px solid var(--fg);
+  outline-offset: -4px;
+}
+
+.cat[aria-pressed='true']::after {
+  content: '✓';
+  position: absolute;
+  top: 4px;
+  right: 8px;
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+/* Con una categoría elegida, las demás se atenúan para que la elegida destaque. */
+.categorias.hay-seleccion .cat[aria-pressed='false'] {
+  opacity: 0.5;
+}
+
+.categorias.pide {
+  animation: pide 0.6s;
+}
+
+@keyframes pide {
+  25%, 75% { transform: scale(1.02); }
+  50% { transform: scale(0.98); }
+}
+
+.btn-guardar {
+  position: sticky;
+  bottom: 0;
+  flex: none;
+  width: 100%;
+  min-height: 64px;
+  padding: 0 12px;
+  border-radius: 14px;
+  background: var(--fg);
+  color: var(--bg);
+  font-size: 1.15rem;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.btn-guardar:active {
+  filter: brightness(0.85);
+}
+
+/* Sin monto o sin categoría se ve apagado, pero sigue respondiendo al toque. */
+.btn-guardar[aria-disabled='true'] {
+  background: var(--surface-2);
+  color: var(--muted);
+  box-shadow: inset 0 0 0 2px var(--border);
+}
+
+.btn-guardar.falta {
+  background: var(--alerta-bg);
+  color: var(--alerta);
+  box-shadow: inset 0 0 0 2px var(--alerta);
+}
+
+/* Los avisos suben para no tapar el botón Guardar. */
+.registrar.con-guardar .toast {
+  bottom: calc(76px + 72px + env(safe-area-inset-bottom));
+}
+
+.toast-breve {
+  justify-content: center;
+  padding: 12px 18px;
+  text-align: center;
+  font-size: 1rem;
+}
+
+/*
+ * Espacio con 12 categorías (4 filas) sin scroll. Primero se achica el monto; si no alcanza,
+ * las categorías bajan a 56 px (nunca menos) y, en pantallas bajas, se aprietan márgenes.
+ * El monto nunca queda bajo la franja del recordatorio: la franja reserva su propio lugar.
+ */
+.zona-monto:has(.aviso-respaldo:not([hidden])) .monto {
+  padding-bottom: 52px;
+}
+
+@media (max-height: 899px) {
+  .monto {
+    font-size: 2.6rem;
+    line-height: 1.05;
+    padding-top: 0;
+  }
+
+  .monto-simbolo {
+    font-size: 1.6rem;
+  }
+
+  .registrar:has(.aviso-respaldo:not([hidden])) .cat {
+    min-height: 56px;
+  }
+}
+
+@media (max-height: 819px) {
+  .registrar {
+    gap: 4px;
+    padding: 2px 10px;
+  }
+
+  .monto {
+    font-size: 2.4rem;
+    padding-bottom: 0;
+  }
+
+  .monto-simbolo {
+    font-size: 1.5rem;
+  }
+
+  .cat {
+    min-height: 56px;
+  }
+
+  /* Con la franja visible no sobra lugar: el monto baja un poco más y la franja reserva su alto. */
+  .zona-monto:has(.aviso-respaldo:not([hidden])) .monto {
+    font-size: 1.8rem;
+    line-height: 1;
+    padding-bottom: 37px;
+  }
+
+  .zona-monto:has(.aviso-respaldo:not([hidden])) .monto-simbolo {
+    font-size: 1.2rem;
+  }
+
+  .aviso-respaldo {
+    min-height: 36px;
+    font-size: 0.8rem;
+  }
+
+  /* Franja más baja, pero con la zona táctil de 48 px (se extiende sin mover nada). */
+  .aviso-respaldo-btn,
+  .aviso-respaldo-cerrar {
+    position: relative;
+    min-height: 36px;
+  }
+
+  .aviso-respaldo-btn::after,
+  .aviso-respaldo-cerrar::after {
+    content: '';
+    position: absolute;
+    inset: -6px 0;
+  }
+}
+
+/*
+ * Los chips (fecha, moneda, cuenta, nota, foto) siempre van en una sola fila: si se envolvieran en dos
+ * filas quitarían 52 px al monto y, con 12 categorías, la pantalla tendría scroll. Se ajustan de
+ * ancho y, si no caben, recortan el texto con "…" (nunca se quitan).
+ */
+.chips {
+  flex-wrap: nowrap;
+  gap: 6px;
+}
+
+.chip {
+  display: block;
+  flex: 0 1 auto;
+  min-width: 0;
+  padding: 0 10px;
+  font-size: 0.95rem;
+  line-height: 44px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chip-miniatura {
+  vertical-align: middle;
+}
+
+/* El recordatorio cabe en una línea (recorta con "…") para no crecer. */
+.aviso-respaldo {
+  font-size: 0.82rem;
+}
+
+.aviso-respaldo-texto {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

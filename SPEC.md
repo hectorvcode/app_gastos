@@ -8,7 +8,7 @@ Se construirá una PWA (app web instalable) que guarda los gastos solo en el cel
 
 Objetivos medibles:
 
-- Registrar un gasto en 3 toques y menos de 5 segundos: abrir la app, escribir el monto, tocar la categoría.
+- Registrar un gasto en 4 toques y menos de 5 segundos: abrir la app, escribir el monto, tocar la categoría y tocar Guardar (con "Guardado rápido" activado, 3 toques: tocar la categoría guarda).
 - Funcionar sin internet desde el primer uso tras la instalación.
 - Guardar por gasto: monto, moneda, categoría, fecha y hora, nota opcional y foto del recibo opcional.
 - Exportar a la laptop en menos de 1 minuto, con un CSV que Google Sheets abre sin ajustes manuales.
@@ -66,7 +66,7 @@ Seis tablas en IndexedDB; las fotos van aparte para que listar gastos sea rápid
 
 **eliminados**: id (del gasto), cuentaId, eliminadoEn (ISO). Gastos borrados que ya se habían exportado; se vacía lo incluido en cada exportación "Solo nuevos". Se agrega en la Fase 6 (migración de Dexie a versionEsquema 3, que solo añade la tabla).
 
-**ajustes** (clave-valor): monedaPredeterminada (COP), monedasVisibles (COP, USD, EUR), cuentaPredeterminada (id de cuenta), ultimaCuenta (última cuenta usada en Registrar), ultimaExportacion (ISO de la última exportación completada), ultimoRespaldo (`{fecha, gastos, fotos}` del último respaldo creado), recordatorioRespaldoCerrado (día en que se cerró el recordatorio de respaldo), decimalCsv (`coma` por defecto o `punto`), versionEsquema (3 desde la Fase 6, 4 desde la Fase 7a).
+**ajustes** (clave-valor): monedaPredeterminada (COP), monedasVisibles (COP, USD, EUR), cuentaPredeterminada (id de cuenta), ultimaCuenta (última cuenta usada en Registrar), ultimaExportacion (ISO de la última exportación completada), ultimoRespaldo (`{fecha, gastos, fotos}` del último respaldo creado), recordatorioRespaldoCerrado (día en que se cerró el recordatorio de respaldo), decimalCsv (`coma` por defecto o `punto`), guardadoRapido (`true` activa el guardado al tocar la categoría; ausente o `false` = botón Guardar, Fase 8), versionEsquema (3 desde la Fase 6, 4 desde la Fase 7a).
 
 No hay conversión de divisas en la app: cada gasto guarda su monto en la moneda original. La conversión se hace en Google Sheets con `GOOGLEFINANCE("CURRENCY:USDCOP")`.
 
@@ -79,8 +79,9 @@ Flujo de registro:
 1. Abrir la app desde el ícono: el monto aparece en 0 y el teclado propio está visible.
 2. Escribir el monto. Para COP no se muestran decimales; se ve con separador de miles (45.000).
 3. Opcional: tocar el chip de fecha (dice "Hoy") para registrar otro día, el chip de moneda para cambiarla, el chip de cuenta (solo si hay más de una cuenta activa) para registrar en otro libro, el ícono de cámara para la foto o "Nota" para escribir.
-4. Tocar una categoría de la cuadrícula: el gasto se guarda al instante y aparece "Guardado · Deshacer" durante 5 segundos.
-5. La pantalla vuelve a 0, lista para el siguiente gasto.
+4. Tocar una categoría de la cuadrícula: la selecciona y la resalta (no guarda). Tocar otra cambia la selección; tocar la misma la deselecciona.
+5. Tocar el botón **Guardar** (ancho completo, fijo justo encima de la barra inferior), cuyo texto resume lo que se guardará: "Guardar 45.000 COP · Comida". Aparece "Guardado · Deshacer" durante 5 segundos.
+6. La pantalla vuelve a 0 con la categoría sin seleccionar, lista para el siguiente gasto.
 
 **Fecha del gasto.** Por defecto cada gasto queda con la fecha de hoy, sin ningún toque extra. Para otro día:
 
@@ -91,14 +92,26 @@ Flujo de registro:
 - Hora: si la fecha es hoy, se guarda la hora actual; si es otro día, se guarda 12:00 y se puede ajustar luego desde Historial.
 - El aviso "Guardado · Deshacer" incluye la fecha cuando no es hoy ("Guardado el 5 oct · Deshacer").
 
+**Botón Guardar y categoría seleccionada (Fase 8).**
+
+- **Selección:** tocar una categoría ya no guarda: la marca (borde grueso y ✓, con las demás atenuadas). Otra categoría cambia la selección; la misma la quita.
+- **Botón "Guardar":** al menos 64 px de alto, ancho completo, fijo justo encima de la barra inferior. Texto: "Guardar 45.000 COP · Comida" (monto con el formato de la moneda; con USD/EUR, 2 decimales). Con monto 0 o sin categoría se ve apagado, pero **nunca queda sin respuesta**: al tocarlo dice qué falta en el propio botón ("Escribe el monto" si falta el monto, aunque tampoco haya categoría; "Elige una categoría") durante unos segundos; el monto vibra o la cuadrícula pulsa para señalarlo.
+- **Al guardar:** el mismo aviso "Guardado · Deshacer" de siempre (con la fecha y la cuenta cuando no son las predeterminadas; sube para no tapar el botón); el monto vuelve a 0 y la categoría queda sin seleccionar. La fecha, la moneda, la cuenta, la nota y la foto pendiente siguen las reglas de antes.
+- **Doble toque:** dos toques rápidos en Guardar crean un solo gasto (el monto y la selección se limpian antes de esperar a la base de datos).
+- **Cambio de cuenta:** si la categoría seleccionada no está entre las visibles de la nueva cuenta, se deselecciona con un aviso breve ("Mercado no está en Hogar: se quitó la selección"). Lo mismo si desde Ajustes se oculta la categoría seleccionada.
+- **Borrador (Fase 5):** además de monto, moneda, fecha, cuenta y nota, guarda la categoría seleccionada; al recuperarlo solo se vuelve a seleccionar si la cuenta aún la muestra. Los borradores anteriores a la Fase 8 siguen siendo válidos.
+- **Teclado físico (laptop):** dígitos, `.`/`,` y Backspace como antes; **Enter** guarda si hay monto y categoría y, si falta algo, muestra el mismo mensaje del botón; **Escape** deselecciona la categoría.
+- **Guardado rápido (Ajustes → Registro):** opción "Guardado rápido al tocar la categoría", desactivada por defecto (`guardadoRapido`). Activada vuelve el comportamiento anterior (tocar la categoría guarda al instante; con monto 0 el monto vibra), el botón Guardar se oculta, Enter se ignora y no hay selección. Es una preferencia: un respaldo la restaura solo en una base sin gastos.
+- **Espacio con 12 categorías, sin scroll (393×852 y 393×780):** los chips van siempre en una sola fila (recortan el texto si no caben; nunca se quitan). Primero se reduce el monto (3.4 → 2.6 → 2.4 rem); si no alcanza, los botones de categoría bajan a 56 px (nunca menos) y, en pantallas bajas, se aprietan los márgenes. La franja del recordatorio de respaldo reserva su propio lugar (el monto nunca queda debajo) y en pantallas bajas mide 36 px con zona táctil de 48 px.
+
 Pantallas (barra inferior con 4 pestañas):
 
 | Pantalla | Qué muestra | Acciones |
 | --- | --- | --- |
-| Registrar | Monto grande, chips de fecha, moneda y cuenta, cámara, nota, teclado y cuadrícula con las categorías visibles de la cuenta actual (3 columnas, hasta 4 filas, botones de mínimo 64 px, sin scroll) | Guardar con un toque, deshacer |
+| Registrar | Monto grande, chips de fecha, moneda y cuenta, cámara, nota, teclado y cuadrícula con las categorías visibles de la cuenta actual (3 columnas, hasta 4 filas, botones de 64 px, o 56 px si el espacio no alcanza; sin scroll) y botón Guardar | Elegir categoría y guardar, deshacer |
 | Historial | Gastos agrupados por día, del más reciente al más antiguo, con miniatura si hay foto | Tocar para editar, borrar o ver la foto; filtrar por mes, categoría y cuenta |
 | Resumen | Total del mes por moneda y por categoría, con barras horizontales simples | Cambiar de mes |
-| Ajustes | Secciones plegables, en este orden: Exportar, Respaldo, Categorías, Cuentas, Monedas, Fotos y Almacenamiento | Ver sección de exportación |
+| Ajustes | Secciones plegables, en este orden: Exportar, Respaldo, Categorías, Cuentas, Monedas, Registro, Fotos y Almacenamiento | Ver sección de exportación |
 
 **Categorías por cuenta (Fase 7a).** Ajustes → "Categorías" (plegable, entre Exportar y Cuentas):
 
@@ -119,7 +132,7 @@ Pantallas (barra inferior con 4 pestañas):
 - El botón o gesto Atrás de Android, también en la app instalada, cierra la hoja abierta en lugar de salir de la app: se usa la History API (`pushState` al abrir, `popstate` al cerrar), que funciona también sin HTTPS. Con hojas anidadas se cierra solo la de arriba. En una pantalla principal sin hojas abiertas, Atrás se comporta como siempre. La lógica está en `lib/navegacion.ts` (`PilaNavegacion`).
 - Si la hoja tiene cambios sin guardar (p. ej. Editar gasto), Atrás —el botón de la pantalla, el de Android y "Cancelar"— pregunta "¿Descartar cambios?" antes de cerrar. Cerrar por código (tras guardar o eliminar) no pregunta. En "Archivo listo", Atrás pregunta "¿Descartar el archivo preparado?" (Descartar archivo / Conservarlo). Si la página se recarga con una hoja abierta, al iniciar la app vuelve a la base del historial (cada entrada guarda `n`, cuántas hay sobre la base), para que ningún Atrás quede sin efecto visible.
 
-Reglas de interfaz: tema claro y oscuro según el sistema, textos en español, formato de fecha `dd/mm/aaaa`, todo usable con una sola mano. Si el monto es 0, tocar una categoría no guarda nada y el monto vibra.
+Reglas de interfaz: tema claro y oscuro según el sistema, textos en español, formato de fecha `dd/mm/aaaa`, todo usable con una sola mano. Si el monto es 0 o no hay categoría, Guardar se ve apagado pero responde al toque (ver "Botón Guardar").
 
 ## Exportación a la laptop y Google Sheets
 
@@ -207,7 +220,7 @@ Cada fase termina con algo que se puede probar en el celular; Claude Code debe h
    - [ ] La URL de GitHub Pages abre en Chrome Android y ofrece "Instalar app".
    - [ ] Instalada, abre sin barra del navegador y funciona en modo avión.
 2. **Registro rápido.** Pantalla Registrar, teclado propio, categorías precargadas, selector de fecha (Hoy, Ayer, Antier, calendario), guardado en IndexedDB.
-   - [ ] Un gasto de hoy se guarda con 3 toques y sobrevive a cerrar la app; uno de otro día se guarda con la fecha elegida y el chip vuelve a "Hoy" al reabrir.
+   - [ ] Un gasto de hoy se guarda con 3 toques (4 desde la Fase 8, con el botón Guardar) y sobrevive a cerrar la app; uno de otro día se guarda con la fecha elegida y el chip vuelve a "Hoy" al reabrir.
    - [ ] "Deshacer" elimina el último gasto durante 5 segundos.
 3. **Historial y edición.** Lista por día, editar y borrar, filtros por mes y categoría.
    - [ ] Editar fecha, monto, moneda, categoría y nota actualiza `editadoEn`.
@@ -215,7 +228,7 @@ Cada fase termina con algo que se puede probar en el celular; Claude Code debe h
    - [ ] COP se muestra sin decimales; USD y EUR con 2.
 4b. **Cuentas.** Tabla `cuentas` y campo `cuentaId` en gastos (migración de Dexie a versionEsquema 2: los gastos existentes pasan a "Personal"), chip de cuenta en Registrar (oculto con una sola cuenta activa; se recuerda en `ultimaCuenta`), filtro de cuenta y cuenta visible por fila en Historial, cambio de cuenta al editar, y sección "Cuentas" en Ajustes (crear, renombrar, emoji, reordenar, predeterminada, archivar/desarchivar, borrar solo sin gastos).
    - [ ] La migración conserva todos los gastos existentes (ni se pierden ni se duplican) y los asigna a "Personal".
-   - [ ] Registrar un gasto sigue tomando 3 toques; el chip de cuenta cambia de color si no es la predeterminada y el aviso "Guardado · Deshacer" nombra la cuenta.
+   - [ ] Registrar un gasto sigue tomando 3 toques (4 desde la Fase 8); el chip de cuenta cambia de color si no es la predeterminada y el aviso "Guardado · Deshacer" nombra la cuenta.
    - [ ] Historial filtra por cuenta combinado con mes y categoría; los totales por día respetan el filtro y siguen separados por moneda.
    - [ ] Una cuenta con gastos no se puede borrar, solo archivar; siempre queda una cuenta activa.
 5. **Fotos del recibo.** Cámara, compresión, miniatura en historial, visor a pantalla completa.
@@ -226,10 +239,15 @@ Cada fase termina con algo que se puede probar en el celular; Claude Code debe h
 7. **Categorías, navegación, respaldo y resumen.** Se divide en dos entregas:
    - **7a. Categorías editables por cuenta, navegación hacia atrás y pendientes.** Catálogo único de categorías con visibilidad y orden por cuenta (migración de Dexie a versionEsquema 4), sección "Categorías" en Ajustes, cuadrícula de Registrar por cuenta, edición y filtro de Historial con categorías ocultas, botón "← Atrás" y Atrás de Android en toda hoja (History API) con "¿Descartar cambios?", aviso de descarga en el celular, visor sin texto de diagnóstico y fórmula de Sheets con "Importados" y "Gastos".
      - [ ] La migración conserva todos los gastos y deja en cada cuenta las categorías activas de antes, en el mismo orden.
-     - [ ] Cada cuenta muestra en Registrar sus categorías en su orden (3 columnas, hasta 4 filas, sin scroll) y la cuadrícula cambia al instante al cambiar de cuenta; registrar sigue siendo 3 toques.
+     - [ ] Cada cuenta muestra en Registrar sus categorías en su orden (3 columnas, hasta 4 filas, sin scroll) y la cuadrícula cambia al instante al cambiar de cuenta; registrar sigue siendo 3 toques (4 desde la Fase 8).
      - [ ] El botón Atrás de Android, también en la app instalada, cierra la hoja abierta (la de arriba si hay anidadas) en lugar de salir de la app; con cambios sin guardar pregunta "¿Descartar cambios?".
    - **7b. Respaldo, resumen y almacenamiento.** Respaldo JSON (con las categorías y la lista `categoriaIds` de cada cuenta), restauración con fusión, pantalla Resumen y estado del almacenamiento en Ajustes.
      - [ ] Restaurar un respaldo en un navegador limpio recupera gastos y fotos.
+8. **Botón Guardar en Registrar.** Tocar una categoría la selecciona; el gasto se guarda con el botón "Guardar" (4 toques), con mensaje de lo que falta, protección contra doble guardado, categoría en el borrador, Enter/Escape en el teclado físico y la opción "Guardado rápido al tocar la categoría" en Ajustes → Registro (ver "Botón Guardar y categoría seleccionada").
+   - [ ] Con monto y categoría, Guardar crea un solo gasto (también con dos toques rápidos), muestra "Guardado · Deshacer" y deja el monto en 0 y la categoría sin seleccionar.
+   - [ ] Sin monto o sin categoría, Guardar dice qué falta ("Escribe el monto" / "Elige una categoría").
+   - [ ] Con 12 categorías visibles, Registrar no tiene scroll en 393×852 ni en 393×780, con y sin la franja del recordatorio de respaldo.
+   - [ ] Con "Guardado rápido" activado, tocar la categoría guarda y el botón Guardar no aparece.
 
 Pruebas: Vitest para la lógica (formato de montos, generación de CSV, fusión de respaldos) y una lista de verificación manual en el celular al cerrar cada fase.
 

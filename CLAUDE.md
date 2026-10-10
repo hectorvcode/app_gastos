@@ -32,7 +32,7 @@ Especificación completa en `SPEC.md`. Este archivo resume las decisiones clave.
 - **Categorías (Fase 7a):** un solo catálogo; cada cuenta guarda `categoriaIds` (visibles y orden, máx. 12, mín. 1). Reglas en `lib/categorias.ts`; toda escritura del catálogo pasa por `modificarCatalogo` (una transacción). Renombrar no toca `editadoEn` de los gastos.
 - **Respaldo y Resumen (Fase 7b):** el respaldo es un ZIP (`datos.json` + `fotos/`) y se descarga siempre (nunca Web Share). Toda la lógica (formato, validación, fusión por id, recordatorio, cálculos del Resumen, almacenamiento) está en `lib/respaldo.ts`, `restaurar.ts`, `recordatorio.ts`, `resumen.ts` y `almacenamiento.ts`; restaurar escribe todo en una sola transacción (`repoRestauracion` en `db.ts`) y las fotos se leen del ZIP antes de abrirla. El respaldo y la restauración no tocan `exportadoEn` de la exportación local.
 - Tras tocar un botón de la pantalla Registrar se le quita el foco, para que Enter o espacio no repitan la acción.
-- Teclado físico en Registrar: dígitos, `.`/`,` (monedas con decimales) y Backspace. Enter se ignora: guardar exige tocar una categoría.
+- **Guardar en Registrar (Fase 8):** tocar una categoría la selecciona; el gasto se guarda con el botón "Guardar" (`.btn-guardar`, nunca `disabled`: sin datos se ve apagado y al tocarlo dice qué falta). Estado y reglas en `SesionRegistro` (`categoriaId`, `tocarCategoria`, `faltante`, `guardarSeleccion`, `cambiarCuenta`, `guardadoRapido`); la selección va en el borrador. Teclado físico: dígitos, `.`/`,` y Backspace; Enter guarda (o muestra lo que falta) y Escape deselecciona. Ajustes → Registro → "Guardado rápido" (`guardadoRapido`, apagado por defecto) restaura el guardado al tocar y oculta el botón. Con 12 categorías no debe haber scroll en 393×852 ni 393×780: los chips van en una sola fila y las categorías bajan a 56 px solo si hace falta.
 
 ## Decisiones clave
 - Sitio estático: TypeScript estricto + Vite, sin frameworks de UI, HTML + CSS propio.
@@ -40,7 +40,7 @@ Especificación completa en `SPEC.md`. Este archivo resume las decisiones clave.
 - Datos solo en IndexedDB (Dexie) en el celular. **Nunca enviar datos de gastos a ningún servidor.**
 - Interfaz en español, una sola mano, botones de mínimo 64 px, tema claro/oscuro según el sistema, fechas `dd/mm/aaaa`.
 - Monto: COP sin decimales con separador de miles; USD/EUR con 2 decimales. Sin conversión de divisas.
-- Registrar abre directo con teclado propio; guardar = tocar categoría; "Guardado · Deshacer" 5 s.
+- Registrar abre directo con teclado propio; guardar = elegir categoría y tocar Guardar (con "Guardado rápido", tocar la categoría); "Guardado · Deshacer" 5 s.
 - Fecha por defecto hoy; no se permiten fechas futuras; vuelve a "Hoy" al cerrar o tras 10 min.
 - `navigator.storage.persist()` al iniciar.
 - CSV UTF-8 con BOM, columnas `id,fecha,hora,monto,moneda,categoria,nota,foto`.

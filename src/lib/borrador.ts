@@ -14,12 +14,14 @@ export const MSG_RECUPERADO = 'Recuperamos el gasto que estabas registrando.';
 export const MSG_FOTO_PERDIDA =
   'La foto se perdió porque Android cerró la app al abrir la cámara. Tómala de nuevo o elígela de la galería.';
 
-/** Lo que Registrar escribió: monto, moneda, fecha elegida (null = Hoy), cuenta y nota. */
+/** Lo que Registrar escribió: monto, moneda, fecha elegida (null = Hoy), cuenta, categoría seleccionada y nota. */
 export interface InstantaneaRegistro {
   entry: string;
   moneda: string;
   fecha: string | null;
   cuentaId: string;
+  /** Categoría seleccionada (Fase 8); null si no hay. Los borradores anteriores a la Fase 8 no la traen. */
+  categoriaId: string | null;
   nota: string;
 }
 
@@ -49,6 +51,7 @@ export function validarBorrador(x: unknown): Borrador | null {
     !/^[A-Z]{3}$/.test(b.moneda) ||
     !(b.fecha === null || (esTexto(b.fecha) && /^\d{4}-\d{2}-\d{2}$/.test(b.fecha))) ||
     !esTexto(b.cuentaId) ||
+    !(b.categoriaId === undefined || b.categoriaId === null || esTexto(b.categoriaId)) ||
     !esTexto(b.nota) ||
     typeof b.esperandoFoto !== 'boolean' ||
     !esNumero(b.guardadoEn)
@@ -60,6 +63,7 @@ export function validarBorrador(x: unknown): Borrador | null {
     moneda: b.moneda,
     fecha: b.fecha as string | null,
     cuentaId: b.cuentaId,
+    categoriaId: typeof b.categoriaId === 'string' ? b.categoriaId : null,
     nota: b.nota,
     esperandoFoto: b.esperandoFoto,
     guardadoEn: b.guardadoEn,

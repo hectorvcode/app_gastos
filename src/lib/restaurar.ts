@@ -44,6 +44,7 @@ const AJUSTES_DE_PREFERENCIAS = new Set([
   'monedasVisibles',
   'decimalCsv',
   'modoRecibo',
+  'guardadoRapido',
   'ultimaCuenta',
   'cuentaPredeterminada',
 ]);

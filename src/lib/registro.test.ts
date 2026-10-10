@@ -23,7 +23,7 @@ function crear(moneda = 'COP') {
 const mouse = (s: SesionRegistro, digitos: string) =>
   [...digitos].forEach((d) => s.pulsar(d as Key));
 const teclado = (s: SesionRegistro, digitos: string) =>
-  [...digitos].forEach((d) => expect(aplicarTeclaFisica(s, d)).toBe(true));
+  [...digitos].forEach((d) => expect(aplicarTeclaFisica(s, d)).toBe('monto'));
 
 function resumen(guardados: Map<string, Gasto>) {
   return [...guardados.values()].map((g) => ({
@@ -73,11 +73,11 @@ describe('registro rápido de dos gastos seguidos', () => {
 });
 
 describe('teclado físico', () => {
-  it('Enter no guarda nada, con o sin monto', async () => {
+  it('Enter por sí solo no guarda: pide a la pantalla ejecutar Guardar', async () => {
     const { sesion, guardados } = crear();
-    expect(aplicarTeclaFisica(sesion, 'Enter')).toBe(true);
+    expect(aplicarTeclaFisica(sesion, 'Enter')).toBe('guardar');
     teclado(sesion, '45000');
-    expect(aplicarTeclaFisica(sesion, 'Enter')).toBe(true);
+    expect(aplicarTeclaFisica(sesion, 'Enter')).toBe('guardar');
     expect(guardados.size).toBe(0);
     expect(sesion.entry).toBe('45000');
   });
@@ -85,10 +85,10 @@ describe('teclado físico', () => {
   it('Backspace borra y otras teclas no se consumen', () => {
     const { sesion } = crear();
     teclado(sesion, '123');
-    expect(aplicarTeclaFisica(sesion, 'Backspace')).toBe(true);
+    expect(aplicarTeclaFisica(sesion, 'Backspace')).toBe('monto');
     expect(sesion.entry).toBe('12');
-    expect(aplicarTeclaFisica(sesion, 'a')).toBe(false);
-    expect(aplicarTeclaFisica(sesion, 'Tab')).toBe(false);
+    expect(aplicarTeclaFisica(sesion, 'a')).toBeNull();
+    expect(aplicarTeclaFisica(sesion, 'Tab')).toBeNull();
   });
 
   it('punto y coma sirven como decimal solo en monedas con decimales', () => {
